@@ -241,8 +241,8 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 			if mutationInRound && !isMutation {
 				return app.ProviderResponse{}, fmt.Errorf("%w: read call after mutation", ErrInvalidToolCall)
 			}
-			if mutationRoundSeen && isMutation {
-				return app.ProviderResponse{}, fmt.Errorf("%w: later mutation batch", ErrInvalidToolCall)
+			if mutationRoundSeen {
+				return app.ProviderResponse{}, fmt.Errorf("%w: calls after mutation batch", ErrInvalidToolCall)
 			}
 			mutationInRound = mutationInRound || isMutation
 			output, err := dispatch(ctx, call)
