@@ -66,6 +66,31 @@ func run() error {
 		if result == "" {
 			return nil
 		}
+		if marker := strings.Index(result, "delete:"); marker >= 0 {
+			token := strings.TrimSpace(result[marker+len("delete:"):])
+			return sender.SendButton(ctx, message.ChannelID, "Xác nhận xóa giao dịch?", "Xóa", "delete:"+token)
+		}
+		if export := orchestrator.TakeExport(); len(export) > 0 {
+			file, fileErr := os.CreateTemp("", "nyan-go-export-*.csv")
+			if fileErr != nil {
+				return fileErr
+			}
+			name := file.Name()
+			defer os.Remove(name)
+			if _, fileErr = file.Write(export); fileErr != nil {
+				file.Close()
+				return fileErr
+			}
+			if fileErr = file.Close(); fileErr != nil {
+				return fileErr
+			}
+			read, fileErr := os.Open(name)
+			if fileErr != nil {
+				return fileErr
+			}
+			defer read.Close()
+			return sender.SendFile(ctx, message.ChannelID, result, "transactions.csv", read)
+		}
 		if strings.HasPrefix(result, "id,type,amount_vnd,") {
 			file, fileErr := os.CreateTemp("", "nyan-go-export-*.csv")
 			if fileErr != nil {

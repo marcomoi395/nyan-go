@@ -21,12 +21,33 @@ type Orchestrator struct {
 	ledger   *LedgerService
 	clock    Clock
 	deletes  *DeleteConfirmer
+	export   []byte
 	mu       sync.Mutex
 	pending  map[string]pendingRequest
 }
 type pendingRequest struct {
 	message string
 	expires time.Time
+}
+
+type Analysis struct {
+	Facts        []string `json:"facts"`
+	Observations []string `json:"observations"`
+	Limitations  []string `json:"limitations"`
+}
+
+func NormalizeAnalysis(text string) (string, error) {
+	var analysis Analysis
+	decoder := json.NewDecoder(strings.NewReader(text))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&analysis); err != nil {
+		return "", fmt.Errorf("analysis must be JSON facts/observations/limitations: %w", err)
+	}
+	if analysis.Facts == nil || analysis.Observations == nil || analysis.Limitations == nil {
+		return "", errors.New("analysis must include facts, observations, and limitations")
+	}
+	encoded, err := json.Marshal(analysis)
+	return string(encoded), err
 }
 
 func NewOrchestrator(provider AIProvider, service *LedgerService, clock Clock) (*Orchestrator, error) {
@@ -124,11 +145,20 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 		}
 		return "Đã xử lý yêu cầu.", nil
 	}
+	if strings.HasPrefix(strings.TrimSpace(response.Text), "{") {
+		return NormalizeAnalysis(response.Text)
+	}
 	return response.Text, nil
 }
 
 func (o *Orchestrator) ConfirmDelete(ctx context.Context, request ledger.RequestContext, token string) ([]ledger.Transaction, error) {
 	return o.deletes.Confirm(ctx, request, token)
+}
+
+func (o *Orchestrator) TakeExport() []byte {
+	data := append([]byte(nil), o.export...)
+	o.export = nil
+	return data
 }
 
 func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestContext, call FunctionCall) (string, Mutation, bool, error) {
@@ -172,7 +202,8 @@ func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestConte
 		if err != nil {
 			return "", Mutation{}, false, err
 		}
-		return string(result), Mutation{}, false, nil
+		o.export = append([]byte(nil), result...)
+		return "Đã chuẩn bị tệp CSV giao dịch.", Mutation{}, false, nil
 	default:
 		return "", Mutation{}, false, fmt.Errorf("unsupported tool %q", call.Name)
 	}
