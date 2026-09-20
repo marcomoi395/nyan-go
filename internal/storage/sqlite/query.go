@@ -54,6 +54,21 @@ func (s *Store) Search(ctx context.Context, filter SearchFilter) (SearchResult, 
 	return SearchResult{Transactions: transactions, Total: total, Truncated: total > len(transactions)}, nil
 }
 
+// Export returns every matching transaction in stable order. Unlike Search,
+// export is intentionally not capped at the Discord result limit.
+func (s *Store) Export(ctx context.Context, filter SearchFilter) ([]ledger.Transaction, error) {
+	where, args, err := transactionWhere(filter.UserID, filter.GuildID, filter.ChannelID, filter.Start, filter.End, filter.Type, filter.Category, filter.NoteContains, filter.MinAmountVND, filter.MaxAmountVND, filter.IncludeDeleted)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE `+where+` ORDER BY occurred_at ASC, id ASC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("export transactions: %w", err)
+	}
+	defer rows.Close()
+	return scanTransactions(rows)
+}
+
 type StatisticsFilter struct {
 	UserID       string
 	GuildID      string
@@ -228,6 +243,16 @@ func getTransaction(ctx context.Context, tx *sql.Tx, id int64, includeDeleted bo
 		where += " AND deleted_at IS NULL"
 	}
 	row := tx.QueryRowContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE `+where, id)
+	return scanTransaction(row)
+}
+
+func getScopedTransaction(ctx context.Context, tx *sql.Tx, request ledger.RequestContext, id int64, includeDeleted bool) (ledger.Transaction, error) {
+	where := "id = ? AND creator_user_id = ? AND guild_id = ? AND channel_id = ?"
+	args := []any{id, request.UserID, request.GuildID, request.ChannelID}
+	if !includeDeleted {
+		where += " AND deleted_at IS NULL"
+	}
+	row := tx.QueryRowContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE `+where, args...)
 	return scanTransaction(row)
 }
 

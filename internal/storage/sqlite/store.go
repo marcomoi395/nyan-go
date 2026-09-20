@@ -105,9 +105,12 @@ func (s *Store) ApplyBatch(ctx context.Context, request ledger.RequestContext, m
 	}
 	defer tx.Rollback()
 
-	var resultJSON string
-	err = tx.QueryRowContext(ctx, `SELECT result_json FROM mutation_batches WHERE source_message_id = ?`, request.SourceMessageID).Scan(&resultJSON)
+	var resultJSON, batchUserID, batchGuildID, batchChannelID string
+	err = tx.QueryRowContext(ctx, `SELECT user_id, guild_id, channel_id, result_json FROM mutation_batches WHERE source_message_id = ?`, request.SourceMessageID).Scan(&batchUserID, &batchGuildID, &batchChannelID, &resultJSON)
 	if err == nil {
+		if batchUserID != request.UserID || batchGuildID != request.GuildID || batchChannelID != request.ChannelID {
+			return nil, errors.New("source message belongs to a different request context")
+		}
 		var ids []int64
 		if err := json.Unmarshal([]byte(resultJSON), &ids); err != nil {
 			return nil, fmt.Errorf("decode idempotency result: %w", err)
@@ -195,7 +198,7 @@ func applyMutation(ctx context.Context, tx *sql.Tx, request ledger.RequestContex
 		}
 		return id, nil
 	case MutationUpdate:
-		before, err := getTransaction(ctx, tx, mutation.ID, true)
+		before, err := getScopedTransaction(ctx, tx, request, mutation.ID, true)
 		if err != nil {
 			return 0, err
 		}
@@ -210,7 +213,7 @@ func applyMutation(ctx context.Context, tx *sql.Tx, request ledger.RequestContex
 		}
 		return mutation.ID, nil
 	case MutationDelete:
-		before, err := getTransaction(ctx, tx, mutation.ID, true)
+		before, err := getScopedTransaction(ctx, tx, request, mutation.ID, true)
 		if err != nil {
 			return 0, err
 		}
@@ -225,7 +228,7 @@ func applyMutation(ctx context.Context, tx *sql.Tx, request ledger.RequestContex
 		}
 		return mutation.ID, nil
 	case MutationRestore:
-		before, err := getTransaction(ctx, tx, mutation.ID, true)
+		before, err := getScopedTransaction(ctx, tx, request, mutation.ID, true)
 		if err != nil {
 			return 0, err
 		}
