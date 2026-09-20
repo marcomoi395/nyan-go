@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 03, 04, 05
 
 # AI orchestrator, clarification, and ordered queue

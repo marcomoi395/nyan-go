@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 02
 
 # Deterministic ledger service

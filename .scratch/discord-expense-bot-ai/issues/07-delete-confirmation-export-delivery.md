@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 06
 
 # Delete confirmation and export delivery

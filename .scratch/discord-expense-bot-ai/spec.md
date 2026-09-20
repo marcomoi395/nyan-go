@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 
 # AI bridge cho bot ghi chép thu chi cá nhân trên Discord
 

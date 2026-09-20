@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 07, 08
 
 # Composition, observability, and end-to-end validation

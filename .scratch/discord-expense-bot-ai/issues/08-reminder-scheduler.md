@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 04, 05
 
 # Reminder scheduler

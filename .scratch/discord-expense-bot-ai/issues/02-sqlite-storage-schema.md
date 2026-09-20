@@ -1,4 +1,4 @@
-Status: resolved
+Status: ready-for-human
 Blocked by: 01
 
 # SQLite schema and repository
