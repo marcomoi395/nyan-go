@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 # SQLite schema and repository
@@ -13,4 +13,3 @@ Implement the pure-Go SQLite bootstrap, explicit schema versioning, transactions
 - Statistics use inclusive start/exclusive end and calculate exact VND totals/comparisons.
 - Soft-deleted records and audit data remain recoverable indefinitely.
 - Integration tests use temporary SQLite files.
-

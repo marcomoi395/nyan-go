@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by:
 
 # Foundation, configuration, and domain contracts
@@ -12,4 +12,3 @@ Implement startup configuration, `.env` loading, fixed `Asia/Ho_Chi_Minh` timezo
 - Domain validation covers positive integer VND amounts, supported types/categories, bounded text, and valid date ranges.
 - Trusted Discord identity and source fields are separate from model-controlled tool arguments.
 - Tests cover configuration defaults/errors and domain validation.
-

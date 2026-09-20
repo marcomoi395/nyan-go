@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 # Deterministic ledger service
@@ -13,4 +13,3 @@ Implement backend-owned transaction validation and operations: create/update/del
 - Statistics include boundaries, timezone, currency, filters, count, income, expense, net, and comparison data.
 - Search and CSV export include only authorized non-deleted data by default.
 - Tests cover atomic multi-create, ambiguity, idempotency, timezone boundaries, totals, and CSV.
-

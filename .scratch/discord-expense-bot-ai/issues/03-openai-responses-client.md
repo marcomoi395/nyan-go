@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 # OpenAI-compatible Responses client
@@ -13,4 +13,3 @@ Implement the `net/http` Responses API transport, fixed JSON-schema tools, optio
 - Requests disclose only the current message and active tool results.
 - Malformed JSON, unsupported items, timeouts, and provider failures return safe errors.
 - `httptest` contract tests cover zero, one, and multiple function calls.
-

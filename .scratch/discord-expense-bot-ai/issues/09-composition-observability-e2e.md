@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 07, 08
 
 # Composition, observability, and end-to-end validation
@@ -12,4 +12,3 @@ Wire the executable, validate configuration before connecting Discord, add grace
 - One deterministic end-to-end test proves message to multiple tools to atomic SQLite batch to Vietnamese confirmation.
 - Provider failure leaves the DB unchanged; duplicate Discord delivery replays the existing result.
 - `go test ./...` and `go vet ./...` pass.
-

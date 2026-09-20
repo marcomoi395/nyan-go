@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 # Discord boundary adapter
@@ -11,4 +11,3 @@ Implement the `discordgo` gateway/sender adapter and reject unauthorized guilds,
 - Unauthorized events are rejected before application/provider work.
 - Vietnamese text, files, and button interactions can be sent only to the configured private channel.
 - Handler registration and send failures are testable without a live Discord connection.
-

@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # AI bridge cho bot ghi chép thu chi cá nhân trên Discord
 

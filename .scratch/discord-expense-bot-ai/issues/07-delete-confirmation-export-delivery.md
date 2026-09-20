@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06
 
 # Delete confirmation and export delivery
@@ -13,4 +13,3 @@ Implement five-minute Discord button confirmation for deletion and private-chann
 - CSV delivery is restricted to the configured private channel.
 - Temporary exports are removed after successful and failed sends.
 - Tests cover expiry, tampering, replay, atomic deletion, delivery failure, content, and cleanup.
-
