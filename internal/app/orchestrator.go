@@ -60,6 +60,7 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 	var response ProviderResponse
 	var err error
 	mutations := make([]Mutation, 0)
+	toolMessages := make([]string, 0)
 	dispatch := func(callCtx context.Context, call FunctionCall) (string, error) {
 		result, mutation, isMutation, dispatchErr := o.dispatch(callCtx, request, call)
 		if dispatchErr != nil {
@@ -68,6 +69,9 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 		if isMutation {
 			mutations = append(mutations, mutation)
 			return `{"queued":true}`, nil
+		}
+		if strings.TrimSpace(result) != "" {
+			toolMessages = append(toolMessages, result)
 		}
 		return result, nil
 	}
@@ -85,6 +89,11 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 		}
 	}
 	if err != nil {
+		var clarificationErr *ClarificationError
+		if errors.As(err, &clarificationErr) {
+			o.pending[request.UserID] = pendingRequest{message: message, expires: o.clock.Now().Add(10 * time.Minute)}
+			return clarificationErr.Message, nil
+		}
 		return "", fmt.Errorf("AI request failed: %w", err)
 	}
 	if len(mutations) > 0 {
@@ -98,6 +107,9 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 		return "", nil
 	}
 	if strings.TrimSpace(response.Text) == "" && len(response.FunctionCalls) > 0 {
+		if len(toolMessages) > 0 {
+			return strings.Join(toolMessages, "\n"), nil
+		}
 		return "Đã xử lý yêu cầu.", nil
 	}
 	return response.Text, nil
@@ -115,7 +127,7 @@ func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestConte
 	case "update_transaction":
 		return "", Mutation{Kind: MutationUpdate, ID: int64(number(raw["transaction_id"])), Input: ledger.TransactionInput{Type: ledger.TransactionType(getString("type")), AmountVND: ledger.AmountVND(number(raw["amount_vnd"])), Category: ledger.Category(getString("category")), Note: getString("note"), OccurredAt: parseTime(getString("occurred_at"))}}, true, nil
 	case "delete_transaction":
-		return "Xác nhận xóa giao dịch bằng nút xác nhận trong 5 phút.", Mutation{Kind: MutationDelete, ID: int64(number(raw["transaction_id"]))}, true, nil
+		return "Xác nhận xóa giao dịch trong 5 phút. Mã xác nhận: " + fmt.Sprint(number(raw["transaction_id"])), Mutation{}, false, nil
 	case "restore_transaction":
 		return "", Mutation{Kind: MutationRestore, ID: int64(number(raw["transaction_id"]))}, true, nil
 	case "search_transactions":
