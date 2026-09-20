@@ -23,12 +23,15 @@ type ProviderRequest struct {
 }
 
 type FunctionCall struct {
-	ID        string
-	Name      string
-	Arguments json.RawMessage
+	ID         string
+	CallID     string
+	ResponseID string
+	Name       string
+	Arguments  json.RawMessage
 }
 
 type ProviderResponse struct {
+	ResponseID    string
 	Text          string
 	FunctionCalls []FunctionCall
 	NoAction      bool
