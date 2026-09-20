@@ -51,6 +51,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	session.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsMessageContent
 	sender, err := discord.NewSender(session, discord.Config{GuildID: cfg.DiscordGuildID, ChannelID: cfg.DiscordChannelID, UserID: cfg.DiscordUserID})
 	if err != nil {
 		return err
