@@ -223,6 +223,7 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 	var previousID string
 	var allCalls []app.FunctionCall
 	var outputs []functionOutput
+	mutationRoundSeen := false
 	for round := 0; round < c.maxRounds; round++ {
 		response, err := c.respond(ctx, request, previousID, outputs)
 		if err != nil {
@@ -234,16 +235,35 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 			return response, nil
 		}
 		outputs = make([]functionOutput, 0, len(response.FunctionCalls))
+		mutationInRound := false
 		for _, call := range response.FunctionCalls {
+			isMutation := isMutationTool(call.Name)
+			if mutationInRound && !isMutation {
+				return app.ProviderResponse{}, fmt.Errorf("%w: read call after mutation", ErrInvalidToolCall)
+			}
+			if mutationRoundSeen && isMutation {
+				return app.ProviderResponse{}, fmt.Errorf("%w: later mutation batch", ErrInvalidToolCall)
+			}
+			mutationInRound = mutationInRound || isMutation
 			output, err := dispatch(ctx, call)
 			if err != nil {
 				return app.ProviderResponse{}, err
 			}
 			outputs = append(outputs, functionOutput{Type: "function_call_output", CallID: call.CallID, Output: output})
 		}
+		mutationRoundSeen = mutationRoundSeen || mutationInRound
 		previousID = response.ResponseID
 	}
 	return app.ProviderResponse{}, fmt.Errorf("%w: %w", ErrProviderFailure, ErrRoundLimit)
+}
+
+func isMutationTool(name string) bool {
+	switch name {
+	case "create_transaction", "update_transaction", "delete_transaction", "restore_transaction":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) respond(ctx context.Context, request app.ProviderRequest, previousID string, outputs []functionOutput) (app.ProviderResponse, error) {
@@ -359,4 +379,4 @@ func (payload responsePayload) toApp() (app.ProviderResponse, error) {
 	return result, nil
 }
 
-const systemInstructions = `Bạn là bộ phân tích cho sổ thu chi cá nhân. Chỉ dùng bảy công cụ được cung cấp; không truy cập SQL, không tự đặt danh tính, không tự tạo dữ liệu. Dùng VND và múi giờ Asia/Ho_Chi_Minh. Nếu thiếu hoặc mơ hồ giá trị bắt buộc, hỏi lại bằng tiếng Việt và không gọi công cụ. Chỉ phân tích số liệu do backend cung cấp.`
+const systemInstructions = `Bạn là bộ phân tích cho sổ thu chi cá nhân. Chỉ dùng bảy công cụ được cung cấp; không truy cập SQL, không tự đặt danh tính, không tự tạo dữ liệu. Dùng VND và múi giờ Asia/Ho_Chi_Minh. Nếu thiếu hoặc mơ hồ giá trị bắt buộc, hỏi lại bằng tiếng Việt và không gọi công cụ. Chỉ phân tích số liệu do backend cung cấp. Khi phân tích thống kê, trả JSON đúng ba mảng facts, observations, limitations; nêu rõ thiếu bằng chứng trong limitations và không suy đoán nguyên nhân, số liệu, phần trăm, giao dịch hoặc danh mục.`

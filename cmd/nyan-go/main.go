@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,7 +21,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Printf("startup failed: %v", err)
+		log.Fatal("startup failed: ", err)
 	}
 }
 
@@ -54,17 +56,52 @@ func run() error {
 		return err
 	}
 	messageHandler := func(ctx context.Context, message discord.Message) error {
+		started := time.Now()
 		result, handleErr := orchestrator.Handle(ctx, ledger.RequestContext{UserID: message.UserID, GuildID: message.GuildID, ChannelID: message.ChannelID, SourceMessageID: message.ID, ReceivedAt: time.Now().In(cfg.Location)}, message.Content)
 		if handleErr != nil {
-			log.Printf("message failed source=%s: %v", message.ID, handleErr)
+			log.Printf("action=message success=false source=%s latency=%s error=%v", message.ID, time.Since(started), handleErr)
 			return sender.SendMessage(ctx, message.ChannelID, "Mình chưa xử lý được yêu cầu này.")
 		}
+		log.Printf("action=message success=true source=%s latency=%s", message.ID, time.Since(started))
 		if result == "" {
 			return nil
 		}
+		if strings.HasPrefix(result, "id,type,amount_vnd,") {
+			file, fileErr := os.CreateTemp("", "nyan-go-export-*.csv")
+			if fileErr != nil {
+				return fileErr
+			}
+			name := file.Name()
+			defer os.Remove(name)
+			if _, fileErr = file.WriteString(result); fileErr != nil {
+				file.Close()
+				return fileErr
+			}
+			if fileErr = file.Close(); fileErr != nil {
+				return fileErr
+			}
+			read, fileErr := os.Open(name)
+			if fileErr != nil {
+				return fileErr
+			}
+			defer read.Close()
+			return sender.SendFile(ctx, message.ChannelID, "", "transactions.csv", read)
+		}
 		return sender.SendMessage(ctx, message.ChannelID, result)
 	}
-	gateway, err := discord.NewGateway(session, discord.Config{GuildID: cfg.DiscordGuildID, ChannelID: cfg.DiscordChannelID, UserID: cfg.DiscordUserID}, messageHandler, nil)
+	interactionHandler := func(ctx context.Context, interaction discord.Interaction) error {
+		if !strings.HasPrefix(interaction.CustomID, "delete:") || interaction.Raw == nil {
+			return nil
+		}
+		token := strings.TrimPrefix(interaction.CustomID, "delete:")
+		_, confirmErr := orchestrator.ConfirmDelete(ctx, ledger.RequestContext{UserID: interaction.UserID, GuildID: interaction.GuildID, ChannelID: interaction.ChannelID, SourceMessageID: interaction.ID, ReceivedAt: time.Now().In(cfg.Location)}, token)
+		content := "Giao dịch đã được xóa."
+		if confirmErr != nil {
+			content = "Không thể xác nhận thao tác xóa."
+		}
+		return sender.RespondToButton(ctx, interaction.Raw, content)
+	}
+	gateway, err := discord.NewGateway(session, discord.Config{GuildID: cfg.DiscordGuildID, ChannelID: cfg.DiscordChannelID, UserID: cfg.DiscordUserID}, messageHandler, interactionHandler)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,7 @@ type Orchestrator struct {
 	provider AIProvider
 	ledger   *LedgerService
 	clock    Clock
+	deletes  *DeleteConfirmer
 	mu       sync.Mutex
 	pending  map[string]pendingRequest
 }
@@ -35,7 +36,11 @@ func NewOrchestrator(provider AIProvider, service *LedgerService, clock Clock) (
 	if clock == nil {
 		clock = realClock{}
 	}
-	return &Orchestrator{provider: provider, ledger: service, clock: clock, pending: map[string]pendingRequest{}}, nil
+	deletes, err := NewDeleteConfirmer(service, clock)
+	if err != nil {
+		return nil, err
+	}
+	return &Orchestrator{provider: provider, ledger: service, clock: clock, deletes: deletes, pending: map[string]pendingRequest{}}, nil
 }
 
 type realClock struct{}
@@ -61,7 +66,14 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 	var err error
 	mutations := make([]Mutation, 0)
 	toolMessages := make([]string, 0)
+	mutationPhase := false
 	dispatch := func(callCtx context.Context, call FunctionCall) (string, error) {
+		if mutationPhase && toolMutationKind(call.Name) == "" {
+			return "", errors.New("read-only tool calls must precede mutations")
+		}
+		if toolMutationKind(call.Name) != "" {
+			mutationPhase = true
+		}
 		result, mutation, isMutation, dispatchErr := o.dispatch(callCtx, request, call)
 		if dispatchErr != nil {
 			return "", dispatchErr
@@ -115,10 +127,17 @@ func (o *Orchestrator) Handle(ctx context.Context, request ledger.RequestContext
 	return response.Text, nil
 }
 
+func (o *Orchestrator) ConfirmDelete(ctx context.Context, request ledger.RequestContext, token string) ([]ledger.Transaction, error) {
+	return o.deletes.Confirm(ctx, request, token)
+}
+
 func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestContext, call FunctionCall) (string, Mutation, bool, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(call.Arguments, &raw); err != nil {
 		return "", Mutation{}, false, fmt.Errorf("tool %s arguments: %w", call.Name, err)
+	}
+	if err := validateToolFields(call.Name, raw); err != nil {
+		return "", Mutation{}, false, err
 	}
 	getString := func(key string) string { var v string; _ = json.Unmarshal(raw[key], &v); return v }
 	switch call.Name {
@@ -127,7 +146,11 @@ func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestConte
 	case "update_transaction":
 		return "", Mutation{Kind: MutationUpdate, ID: int64(number(raw["transaction_id"])), Input: ledger.TransactionInput{Type: ledger.TransactionType(getString("type")), AmountVND: ledger.AmountVND(number(raw["amount_vnd"])), Category: ledger.Category(getString("category")), Note: getString("note"), OccurredAt: parseTime(getString("occurred_at"))}}, true, nil
 	case "delete_transaction":
-		return "Xác nhận xóa giao dịch trong 5 phút. Mã xác nhận: " + fmt.Sprint(number(raw["transaction_id"])), Mutation{}, false, nil
+		confirmation, err := o.deletes.Prepare(request, []int64{number(raw["transaction_id"])}, "giao dịch")
+		if err != nil {
+			return "", Mutation{}, false, err
+		}
+		return "Xác nhận xóa giao dịch trong 5 phút: delete:" + confirmation.Token, Mutation{}, false, nil
 	case "restore_transaction":
 		return "", Mutation{Kind: MutationRestore, ID: int64(number(raw["transaction_id"]))}, true, nil
 	case "search_transactions":
@@ -156,6 +179,60 @@ func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestConte
 }
 
 func number(raw json.RawMessage) int64 { var n int64; _ = json.Unmarshal(raw, &n); return n }
+
+func validateToolFields(name string, raw map[string]json.RawMessage) error {
+	allowed := map[string]map[string]string{
+		"create_transaction": {"type": "string!", "amount_vnd": "int!", "category": "string!", "note": "string!", "occurred_at": "time!"},
+		"update_transaction": {"transaction_id": "int!", "type": "string!", "amount_vnd": "int!", "category": "string!", "note": "string!", "occurred_at": "time!"},
+		"delete_transaction": {"transaction_id": "int!"}, "restore_transaction": {"transaction_id": "int!"},
+		"search_transactions": {"start": "time", "end": "time", "type": "string", "category": "string", "note": "string", "min_amount_vnd": "int", "max_amount_vnd": "int"},
+		"get_statistics":      {"start": "time!", "end": "time!", "type": "string", "category": "string", "grouping": "string!", "comparison_start": "time", "comparison_end": "time"},
+		"export_transactions": {"start": "time", "end": "time", "type": "string", "category": "string"},
+	}
+	schema, ok := allowed[name]
+	if !ok {
+		return fmt.Errorf("unsupported tool %q", name)
+	}
+	for key := range raw {
+		if _, ok := schema[key]; !ok {
+			return fmt.Errorf("unsupported field %q for %s", key, name)
+		}
+	}
+	for key, kind := range schema {
+		value, present := raw[key]
+		required := strings.HasSuffix(kind, "!")
+		kind = strings.TrimSuffix(kind, "!")
+		if !present {
+			if required {
+				return fmt.Errorf("missing required field %q", key)
+			}
+			continue
+		}
+		switch kind {
+		case "string":
+			var v string
+			if err := json.Unmarshal(value, &v); err != nil || required && strings.TrimSpace(v) == "" {
+				return fmt.Errorf("invalid field %q", key)
+			}
+		case "int":
+			var v int64
+			if err := json.Unmarshal(value, &v); err != nil || v <= 0 {
+				return fmt.Errorf("invalid field %q", key)
+			}
+		case "time":
+			var v string
+			if err := json.Unmarshal(value, &v); err != nil || required && strings.TrimSpace(v) == "" {
+				return fmt.Errorf("invalid field %q", key)
+			}
+			if strings.TrimSpace(v) != "" {
+				if _, err := time.Parse(time.RFC3339, v); err != nil {
+					return fmt.Errorf("invalid field %q: %w", key, err)
+				}
+			}
+		}
+	}
+	return nil
+}
 func parseTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}

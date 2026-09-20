@@ -56,6 +56,7 @@ type Interaction struct {
 	ChannelID string
 	UserID    string
 	CustomID  string
+	Raw       *discordgo.Interaction
 }
 
 type MessageHandler func(context.Context, Message) error
@@ -122,7 +123,7 @@ func (g *Gateway) handleInteractionCreate(_ *discordgo.Session, event *discordgo
 	userID := interactionUserID(event.Interaction)
 	_ = g.interactionHandler(context.Background(), Interaction{
 		ID: event.ID, GuildID: event.GuildID, ChannelID: event.ChannelID,
-		UserID: userID, CustomID: data.CustomID,
+		UserID: userID, CustomID: data.CustomID, Raw: event.Interaction,
 	})
 }
 
