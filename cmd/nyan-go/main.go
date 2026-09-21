@@ -69,7 +69,8 @@ func run() error {
 		}
 		if marker := strings.Index(result, "delete:"); marker >= 0 {
 			token := strings.TrimSpace(result[marker+len("delete:"):])
-			return sender.SendButton(ctx, message.ChannelID, "Xác nhận xóa giao dịch?", "Xóa", "delete:"+token)
+			prompt := strings.TrimSpace(result[:marker])
+			return sender.SendButton(ctx, message.ChannelID, prompt, "Xóa", "delete:"+token)
 		}
 		if export := orchestrator.TakeExport(); len(export) > 0 {
 			file, fileErr := os.CreateTemp("", "nyan-go-export-*.csv")

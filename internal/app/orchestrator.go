@@ -197,29 +197,38 @@ func (o *Orchestrator) dispatch(ctx context.Context, request ledger.RequestConte
 		}
 		return "", Mutation{Kind: MutationUpdate, ID: int64(numericArgument(raw["transaction_id"])), Input: input}, true, nil
 	case "delete_transaction":
-		confirmation, err := o.deletes.Prepare(request, []int64{numericArgument(raw["transaction_id"])}, "giao dịch")
+		id := numericArgument(raw["transaction_id"])
+		transaction, err := o.ledger.GetTransaction(ctx, request, id)
+		if err != nil {
+			return "", Mutation{}, false, clarification("Mình không tìm thấy giao dịch cần xóa.")
+		}
+		summary := fmt.Sprintf("giao dịch #%d: %s %s VND - %s", transaction.ID, typeLabel(transaction.Type), formatAmount(transaction.AmountVND), categoryLabel(transaction.Category))
+		if transaction.Note != "" {
+			summary += " - " + transaction.Note
+		}
+		confirmation, err := o.deletes.Prepare(request, []int64{id}, summary)
 		if err != nil {
 			return "", Mutation{}, false, err
 		}
-		return "Xác nhận xóa giao dịch trong 5 phút: delete:" + confirmation.Token, Mutation{}, false, nil
+		return fmt.Sprintf("Xác nhận xóa %d giao dịch (%s) trong 5 phút: delete:%s", confirmation.Count, confirmation.Summary, confirmation.Token), Mutation{}, false, nil
 	case "restore_transaction":
 		return "", Mutation{Kind: MutationRestore, ID: int64(numericArgument(raw["transaction_id"]))}, true, nil
 	case "search_transactions":
-		result, err := o.ledger.Search(ctx, request, SearchRequest{Start: parseTime(getString("start")), End: parseTime(getString("end")), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category")), NoteContains: getString("note"), MinAmountVND: ledger.AmountVND(numericArgument(raw["min_amount_vnd"])), MaxAmountVND: ledger.AmountVND(numericArgument(raw["max_amount_vnd"]))})
+		result, err := o.ledger.Search(ctx, request, SearchRequest{Start: parseTime(getString("start"), request.ReceivedAt), End: parseTime(getString("end"), request.ReceivedAt), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category")), NoteContains: getString("note"), MinAmountVND: ledger.AmountVND(numericArgument(raw["min_amount_vnd"])), MaxAmountVND: ledger.AmountVND(numericArgument(raw["max_amount_vnd"]))})
 		if err != nil {
 			return "", Mutation{}, false, err
 		}
 		encoded, err := marshal(compactSearchResult(result))
 		return encoded, Mutation{}, false, err
 	case "get_statistics":
-		result, err := o.ledger.Statistics(ctx, request, StatisticsRequest{Start: parseTime(getString("start")), End: parseTime(getString("end")), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category")), Group: getString("grouping"), CompareStart: parseTime(getString("comparison_start")), CompareEnd: parseTime(getString("comparison_end"))})
+		result, err := o.ledger.Statistics(ctx, request, StatisticsRequest{Start: parseTime(getString("start"), request.ReceivedAt), End: parseTime(getString("end"), request.ReceivedAt), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category")), Group: getString("grouping"), CompareStart: parseTime(getString("comparison_start"), request.ReceivedAt), CompareEnd: parseTime(getString("comparison_end"), request.ReceivedAt)})
 		if err != nil {
 			return "", Mutation{}, false, err
 		}
 		encoded, err := marshal(result)
 		return encoded, Mutation{}, false, err
 	case "export_transactions":
-		result, err := o.ledger.ExportCSV(ctx, request, SearchRequest{Start: parseTime(getString("start")), End: parseTime(getString("end")), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category"))})
+		result, err := o.ledger.ExportCSV(ctx, request, SearchRequest{Start: parseTime(getString("start"), request.ReceivedAt), End: parseTime(getString("end"), request.ReceivedAt), Type: ledger.TransactionType(getString("type")), Category: ledger.Category(getString("category"))})
 		if err != nil {
 			return "", Mutation{}, false, err
 		}
@@ -328,7 +337,7 @@ func validateToolFields(name string, raw map[string]json.RawMessage) error {
 	}
 	return nil
 }
-func parseTime(value string) time.Time {
+func parseTime(value string, reference ...time.Time) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
@@ -338,6 +347,28 @@ func parseTime(value string) time.Time {
 	location, err := time.LoadLocation(ApplicationTimezone)
 	if err != nil {
 		return time.Time{}
+	}
+	base := time.Now().In(location)
+	if len(reference) > 0 && !reference[0].IsZero() {
+		base = reference[0].In(location)
+	}
+	normalized := strings.Fields(foldVietnamese(value))
+	if len(normalized) >= 2 && (normalized[0] == "hom" || normalized[0] == "ngay") {
+		if offset, ok := map[string]int{"nay": 0, "qua": -1, "mai": 1}[normalized[1]]; ok {
+			date := base.AddDate(0, 0, offset)
+			return time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, location)
+		}
+		if normalized[0] == "ngay" {
+			if parsed, parseErr := time.ParseInLocation("02/01", normalized[1], location); parseErr == nil {
+				return time.Date(base.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, location)
+			}
+		}
+	}
+	if normalizedValue := strings.TrimSpace(foldVietnamese(value)); normalizedValue == "thang nay" {
+		return time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, location)
+	}
+	if parsed, parseErr := time.ParseInLocation("02/01", value, location); parseErr == nil {
+		return time.Date(base.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, location)
 	}
 	parsed, _ := time.ParseInLocation("2006-01-02", value, location)
 	return parsed

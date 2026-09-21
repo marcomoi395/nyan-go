@@ -174,6 +174,27 @@ func TestRespondWithDispatcherContinuesWithOnlyFunctionOutputs(t *testing.T) {
 	}
 }
 
+func TestRespondWithDispatcherAggregatesUsageAcrossRounds(t *testing.T) {
+	recorder := &usageRecorder{}
+	requests := 0
+	client, err := NewClient("http://provider.test", "model", "", WithUsageRecorder(recorder), WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return jsonResponse(map[string]any{"id": "resp_1", "output": []any{map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "search_transactions", "arguments": `{}`}}, "usage": map[string]any{"input_tokens": 2, "output_tokens": 1, "total_tokens": 3}}), nil
+		}
+		return jsonResponse(map[string]any{"id": "resp_2", "output": []any{}, "usage": map[string]any{"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}}), nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RespondWithDispatcher(context.Background(), app.ProviderRequest{Message: "tìm"}, func(context.Context, app.FunctionCall) (string, error) { return `{}`, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.record.InputTokens != 6 || recorder.record.OutputTokens != 4 || recorder.record.TotalTokens != 10 || recorder.record.RoundCount != 2 || recorder.record.Status != "success" {
+		t.Fatalf("record=%+v", recorder.record)
+	}
+}
+
 func TestRespondWithDispatcherStopsAfterMutationRound(t *testing.T) {
 	requests := 0
 	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {

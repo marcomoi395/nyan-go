@@ -328,6 +328,10 @@ type LedgerExporter interface {
 	Export(context.Context, sqlite.SearchFilter) ([]ledger.Transaction, error)
 }
 
+type LedgerReader interface {
+	Get(context.Context, ledger.RequestContext, int64) (ledger.Transaction, error)
+}
+
 func NewLedgerService(store LedgerStore, location *time.Location) (*LedgerService, error) {
 	if store == nil {
 		return nil, errors.New("ledger store is required")
@@ -426,6 +430,17 @@ func (s *LedgerService) Search(ctx context.Context, request ledger.RequestContex
 		return sqlite.SearchResult{}, err
 	}
 	return s.store.Search(ctx, filter)
+}
+
+func (s *LedgerService) GetTransaction(ctx context.Context, request ledger.RequestContext, id int64) (ledger.Transaction, error) {
+	if err := request.Validate(); err != nil {
+		return ledger.Transaction{}, err
+	}
+	reader, ok := s.store.(LedgerReader)
+	if !ok {
+		return ledger.Transaction{}, errors.New("ledger store does not support transaction reads")
+	}
+	return reader.Get(ctx, request, id)
 }
 
 func (s *LedgerService) Statistics(ctx context.Context, request ledger.RequestContext, input StatisticsRequest) (sqlite.Statistics, error) {

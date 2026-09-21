@@ -228,7 +228,11 @@ func IsSupportedTool(name string) bool {
 func (c *Client) Respond(ctx context.Context, request app.ProviderRequest) (app.ProviderResponse, error) {
 	started := time.Now()
 	response, err := c.respond(ctx, request, "", nil)
-	c.recordUsage(response, 1, started)
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	c.recordUsage(response, 1, "respond", status, started)
 	return response, err
 }
 
@@ -246,16 +250,26 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 	var allCalls []app.FunctionCall
 	var outputs []functionOutput
 	mutationRoundSeen := false
+	started := time.Now()
+	var usage app.ProviderUsage
+	hasUsage := false
 	for round := 0; round < c.maxRounds; round++ {
-		started := time.Now()
 		response, err := c.respond(ctx, request, previousID, outputs)
 		if err != nil {
+			c.recordUsage(providerResponseUsage(usage, hasUsage), round+1, "provider_loop", "error", started)
 			return app.ProviderResponse{}, err
 		}
-		c.recordUsage(response, round+1, started)
+		if response.Usage != nil {
+			usage.InputTokens += response.Usage.InputTokens
+			usage.OutputTokens += response.Usage.OutputTokens
+			usage.TotalTokens += response.Usage.TotalTokens
+			hasUsage = true
+		}
 		allCalls = append(allCalls, response.FunctionCalls...)
 		if len(response.FunctionCalls) == 0 {
 			response.FunctionCalls = allCalls
+			response.Usage = providerResponseUsage(usage, hasUsage).Usage
+			c.recordUsage(response, round+1, "provider_loop", "success", started)
 			return response, nil
 		}
 		outputs = make([]functionOutput, 0, len(response.FunctionCalls))
@@ -271,25 +285,42 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 			mutationInRound = mutationInRound || isMutation
 			output, err := dispatch(ctx, call)
 			if err != nil {
+				c.recordUsage(providerResponseUsage(usage, hasUsage), round+1, "provider_loop", "error", started)
 				return app.ProviderResponse{}, err
 			}
 			outputs = append(outputs, functionOutput{Type: "function_call_output", CallID: call.CallID, Output: output})
 		}
 		if mutationInRound {
 			response.FunctionCalls = allCalls
+			response.Usage = providerResponseUsage(usage, hasUsage).Usage
+			c.recordUsage(response, round+1, "provider_loop", "success", started)
 			return response, nil
 		}
 		mutationRoundSeen = mutationRoundSeen || mutationInRound
 		previousID = response.ResponseID
 	}
+	c.recordUsage(providerResponseUsage(usage, hasUsage), c.maxRounds, "provider_loop", "error", started)
 	return app.ProviderResponse{}, fmt.Errorf("%w: %w", ErrProviderFailure, ErrRoundLimit)
 }
 
-func (c *Client) recordUsage(response app.ProviderResponse, round int, started time.Time) {
-	if c.usageRecorder == nil || response.Usage == nil {
+func providerResponseUsage(usage app.ProviderUsage, present bool) app.ProviderResponse {
+	if !present {
+		return app.ProviderResponse{}
+	}
+	return app.ProviderResponse{Usage: &usage}
+}
+
+func (c *Client) recordUsage(response app.ProviderResponse, rounds int, action, status string, started time.Time) {
+	if c.usageRecorder == nil {
 		return
 	}
-	c.usageRecorder.RecordUsage(UsageRecord{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens, RoundCount: round, Action: "respond", Status: "success", Latency: time.Since(started)})
+	record := UsageRecord{RoundCount: rounds, Action: action, Status: status, Latency: time.Since(started)}
+	if response.Usage != nil {
+		record.InputTokens = response.Usage.InputTokens
+		record.OutputTokens = response.Usage.OutputTokens
+		record.TotalTokens = response.Usage.TotalTokens
+	}
+	c.usageRecorder.RecordUsage(record)
 }
 
 func isMutationTool(name string) bool {

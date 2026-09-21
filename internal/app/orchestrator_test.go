@@ -134,6 +134,31 @@ func TestParseTimeOfDayAtCanonicalHour(t *testing.T) {
 	}
 }
 
+func TestParseTimeSupportsVietnameseRelativeDates(t *testing.T) {
+	location, _ := time.LoadLocation(ApplicationTimezone)
+	reference := time.Date(2026, 9, 21, 12, 0, 0, 0, location)
+	want := time.Date(2026, 9, 20, 0, 0, 0, 0, location)
+	if got := parseTime("hôm qua", reference); !got.Equal(want) {
+		t.Fatalf("got=%v want=%v", got, want)
+	}
+}
+
+func TestDeleteConfirmationIncludesCountAndSummary(t *testing.T) {
+	service, _, request := serviceFixture(t)
+	if _, err := service.ApplyMutations(context.Background(), request, []Mutation{{Kind: MutationCreate, Input: testExpense(request.ReceivedAt, 25_000)}}); err != nil {
+		t.Fatal(err)
+	}
+	provider := &orchestratorProvider{call: FunctionCall{Name: "delete_transaction", Arguments: json.RawMessage(`{"transaction_id":1}`)}}
+	orchestrator, err := NewOrchestrator(provider, service, fixedClock{at: request.ReceivedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := orchestrator.Handle(context.Background(), request, "xóa giao dịch 7")
+	if err != nil || !strings.Contains(text, "xóa 1 giao dịch") || !strings.Contains(text, "giao dịch #1") || !strings.Contains(text, "delete:") {
+		t.Fatalf("text=%q err=%v", text, err)
+	}
+}
+
 type fixedClock struct{ at time.Time }
 
 func (c fixedClock) Now() time.Time { return c.at }

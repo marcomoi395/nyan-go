@@ -54,6 +54,14 @@ func (s *Store) Search(ctx context.Context, filter SearchFilter) (SearchResult, 
 	return SearchResult{Transactions: transactions, Total: total, Truncated: total > len(transactions)}, nil
 }
 
+func (s *Store) Get(ctx context.Context, request ledger.RequestContext, id int64) (ledger.Transaction, error) {
+	if err := request.Validate(); err != nil {
+		return ledger.Transaction{}, err
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE id = ? AND creator_user_id = ? AND guild_id = ? AND channel_id = ? AND deleted_at IS NULL`, id, request.UserID, request.GuildID, request.ChannelID)
+	return scanTransaction(row)
+}
+
 // Export returns every matching transaction in stable order. Unlike Search,
 // export is intentionally not capped at the Discord result limit.
 func (s *Store) Export(ctx context.Context, filter SearchFilter) ([]ledger.Transaction, error) {
