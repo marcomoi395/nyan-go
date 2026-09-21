@@ -346,6 +346,8 @@ func (payload responsePayload) toApp() (app.ProviderResponse, error) {
 			return app.ProviderResponse{}, fmt.Errorf("%w: invalid output item", ErrMalformedResponse)
 		}
 		switch header.Type {
+		case "reasoning":
+			continue
 		case "function_call":
 			var call responseFunctionCall
 			if err := json.Unmarshal(raw, &call); err != nil || call.Type != "function_call" || call.ID == "" || call.CallID == "" || !IsSupportedTool(call.Name) {

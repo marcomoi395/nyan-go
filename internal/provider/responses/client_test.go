@@ -77,6 +77,31 @@ func TestRespondParsesMultipleFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestRespondIgnoresReasoningOutput(t *testing.T) {
+	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+		return jsonResponse(map[string]any{
+			"id": "resp_1",
+			"output": []any{
+				map[string]any{"type": "reasoning", "id": "rs_1"},
+				map[string]any{
+					"type": "message", "role": "assistant",
+					"content": []any{map[string]any{"type": "output_text", "text": "Đã ghi"}},
+				},
+			},
+		}), nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Respond(context.Background(), app.ProviderRequest{Message: "ghi chi tiêu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "Đã ghi" {
+		t.Fatalf("text = %q", response.Text)
+	}
+}
+
 func TestRespondWithDispatcherContinuesWithOnlyFunctionOutputs(t *testing.T) {
 	var requests []responseRequest
 	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
