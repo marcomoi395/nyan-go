@@ -41,6 +41,13 @@ type responsePayload struct {
 	ID         string            `json:"id"`
 	Output     []json.RawMessage `json:"output"`
 	OutputText string            `json:"output_text"`
+	Usage      *responseUsage    `json:"usage"`
+}
+
+type responseUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 }
 
 type outputHeader struct {

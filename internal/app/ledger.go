@@ -551,13 +551,45 @@ func ConfirmMutations(transactions []ledger.Transaction) string {
 		}
 		builder.WriteString(formatAmount(transaction.AmountVND))
 		builder.WriteString(" VND - ")
-		builder.WriteString(string(transaction.Category))
+		builder.WriteString(categoryLabel(transaction.Category))
 		if transaction.Note != "" {
 			builder.WriteString(" - ")
 			builder.WriteString(transaction.Note)
 		}
 	}
 	return builder.String()
+}
+
+func ConfirmMutationBatch(mutations []Mutation, transactions []ledger.Transaction) string {
+	if len(mutations) == 1 && len(transactions) == 1 {
+		verb := map[MutationKind]string{MutationUpdate: "Đã cập nhật giao dịch", MutationRestore: "Đã khôi phục giao dịch", MutationCreate: "Đã ghi giao dịch"}[mutations[0].Kind]
+		if verb != "" {
+			transaction := transactions[0]
+			text := verb + ": " + typeLabel(transaction.Type) + " " + formatAmount(transaction.AmountVND) + " VND - " + categoryLabel(transaction.Category)
+			if transaction.Note != "" {
+				text += " - " + transaction.Note
+			}
+			return text
+		}
+	}
+	return ConfirmMutations(transactions)
+}
+
+func categoryLabel(value ledger.Category) string {
+	labels := map[ledger.Category]string{
+		ledger.CategoryFood: "an uong", ledger.CategoryTransport: "di lai", ledger.CategoryHousing: "nha o",
+		ledger.CategoryUtilities: "tien ich", ledger.CategoryShopping: "mua sam", ledger.CategoryHealth: "suc khoe",
+		ledger.CategoryEducation: "giao duc", ledger.CategoryEntertainment: "giai tri", ledger.CategoryTravel: "du lich",
+		ledger.CategoryInsurance: "bao hiem", ledger.CategoryTaxFee: "thue phi", ledger.CategoryFamily: "gia dinh",
+		ledger.CategoryPet: "thu cung", ledger.CategoryWork: "cong viec", ledger.CategoryDebtFinance: "no tai chinh",
+		ledger.CategoryOther: "khac", ledger.CategorySalary: "luong", ledger.CategoryBonus: "thuong",
+		ledger.CategoryFreelance: "freelance", ledger.CategoryBusiness: "kinh doanh", ledger.CategoryInvestmentReturn: "dau tu",
+		ledger.CategoryRefund: "hoan tien", ledger.CategoryGift: "qua tang",
+	}
+	if label, ok := labels[value]; ok {
+		return label
+	}
+	return string(value)
 }
 
 func typeLabel(value ledger.TransactionType) string {

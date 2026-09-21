@@ -35,7 +35,7 @@ func run() error {
 		return err
 	}
 	defer store.Close()
-	provider, err := responses.NewFromConfig(cfg)
+	provider, err := responses.NewFromConfig(cfg, responses.WithUsageRecorder(usageLogger{}))
 	if err != nil {
 		return err
 	}
@@ -157,3 +157,9 @@ func run() error {
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
+
+type usageLogger struct{}
+
+func (usageLogger) RecordUsage(record responses.UsageRecord) {
+	log.Printf("action=%s status=%s input_tokens=%d output_tokens=%d total_tokens=%d rounds=%d latency=%s", record.Action, record.Status, record.InputTokens, record.OutputTokens, record.TotalTokens, record.RoundCount, record.Latency)
+}

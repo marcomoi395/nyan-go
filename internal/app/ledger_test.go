@@ -97,7 +97,7 @@ func TestExportCSVExcludesDeleted(t *testing.T) {
 
 func TestConfirmMutationsVietnameseAndAmountFormatting(t *testing.T) {
 	text := ConfirmMutations([]ledger.Transaction{{Type: ledger.TransactionExpense, AmountVND: 1_200_000, Category: ledger.CategoryFood, Note: "trưa"}})
-	if !strings.Contains(text, "Đã ghi giao dịch") || !strings.Contains(text, "1.200.000 VND") {
+	if !strings.Contains(text, "Đã ghi giao dịch") || !strings.Contains(text, "1.200.000 VND") || strings.Contains(text, "food") || !strings.Contains(text, "an uong") {
 		t.Fatalf("confirmation: %q", text)
 	}
 }

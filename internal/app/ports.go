@@ -35,6 +35,13 @@ type ProviderResponse struct {
 	Text          string
 	FunctionCalls []FunctionCall
 	NoAction      bool
+	Usage         *ProviderUsage
+}
+
+type ProviderUsage struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
 }
 
 type AIProvider interface {

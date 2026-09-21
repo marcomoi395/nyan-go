@@ -46,6 +46,24 @@ func (e *ProviderError) Unwrap() error { return ErrProviderFailure }
 
 type Option func(*Client)
 
+type UsageRecord struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+	RoundCount   int
+	Action       string
+	Status       string
+	Latency      time.Duration
+}
+
+type UsageRecorder interface {
+	RecordUsage(UsageRecord)
+}
+
+func WithUsageRecorder(recorder UsageRecorder) Option {
+	return func(c *Client) { c.usageRecorder = recorder }
+}
+
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *Client) {
 		if client != nil {
@@ -72,13 +90,14 @@ func WithMaxRounds(rounds int) Option {
 
 // Client is an app.AIProvider backed by a Responses API endpoint.
 type Client struct {
-	baseURL      string
-	model        string
-	apiKey       string
-	httpClient   *http.Client
-	timeout      time.Duration
-	maxRounds    int
-	instructions string
+	baseURL       string
+	model         string
+	apiKey        string
+	httpClient    *http.Client
+	timeout       time.Duration
+	maxRounds     int
+	instructions  string
+	usageRecorder UsageRecorder
 }
 
 func NewClient(baseURL, model, apiKey string, options ...Option) (*Client, error) {
@@ -124,7 +143,7 @@ func FixedTools() []app.ToolDefinition {
 				"amount_vnd": map[string]any{"type": "integer", "minimum": 1},
 				"category":   map[string]any{"type": "string"}, "note": map[string]any{"type": "string"},
 				"occurred_at": map[string]any{"type": "string"},
-			}, required: []string{"type", "amount_vnd", "category", "note", "occurred_at"},
+			}, required: []string{"amount_vnd"},
 		},
 		{
 			name: "update_transaction", description: "Cập nhật giao dịch đã xác định rõ.",
@@ -207,7 +226,10 @@ func IsSupportedTool(name string) bool {
 // Respond performs one provider request. Use RespondWithDispatcher when the
 // application needs the provider to continue after executing function calls.
 func (c *Client) Respond(ctx context.Context, request app.ProviderRequest) (app.ProviderResponse, error) {
-	return c.respond(ctx, request, "", nil)
+	started := time.Now()
+	response, err := c.respond(ctx, request, "", nil)
+	c.recordUsage(response, 1, started)
+	return response, err
 }
 
 // RespondWithDispatcher runs the Responses function-call continuation loop.
@@ -225,10 +247,12 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 	var outputs []functionOutput
 	mutationRoundSeen := false
 	for round := 0; round < c.maxRounds; round++ {
+		started := time.Now()
 		response, err := c.respond(ctx, request, previousID, outputs)
 		if err != nil {
 			return app.ProviderResponse{}, err
 		}
+		c.recordUsage(response, round+1, started)
 		allCalls = append(allCalls, response.FunctionCalls...)
 		if len(response.FunctionCalls) == 0 {
 			response.FunctionCalls = allCalls
@@ -251,10 +275,21 @@ func (c *Client) RespondWithDispatcher(ctx context.Context, request app.Provider
 			}
 			outputs = append(outputs, functionOutput{Type: "function_call_output", CallID: call.CallID, Output: output})
 		}
+		if mutationInRound {
+			response.FunctionCalls = allCalls
+			return response, nil
+		}
 		mutationRoundSeen = mutationRoundSeen || mutationInRound
 		previousID = response.ResponseID
 	}
 	return app.ProviderResponse{}, fmt.Errorf("%w: %w", ErrProviderFailure, ErrRoundLimit)
+}
+
+func (c *Client) recordUsage(response app.ProviderResponse, round int, started time.Time) {
+	if c.usageRecorder == nil || response.Usage == nil {
+		return
+	}
+	c.usageRecorder.RecordUsage(UsageRecord{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, TotalTokens: response.Usage.TotalTokens, RoundCount: round, Action: "respond", Status: "success", Latency: time.Since(started)})
 }
 
 func isMutationTool(name string) bool {
@@ -339,6 +374,9 @@ func (payload responsePayload) toApp() (app.ProviderResponse, error) {
 		return app.ProviderResponse{}, fmt.Errorf("%w: missing output", ErrMalformedResponse)
 	}
 	result := app.ProviderResponse{ResponseID: payload.ID}
+	if payload.Usage != nil {
+		result.Usage = &app.ProviderUsage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens, TotalTokens: payload.Usage.TotalTokens}
+	}
 	var messageText strings.Builder
 	for _, raw := range payload.Output {
 		var header outputHeader
@@ -381,4 +419,4 @@ func (payload responsePayload) toApp() (app.ProviderResponse, error) {
 	return result, nil
 }
 
-const systemInstructions = `Bạn là bộ phân tích cho sổ thu chi cá nhân. Chỉ dùng bảy công cụ được cung cấp; không truy cập SQL, không tự đặt danh tính, không tự tạo dữ liệu. Dùng VND và múi giờ Asia/Ho_Chi_Minh. Nếu thiếu hoặc mơ hồ giá trị bắt buộc, hỏi lại bằng tiếng Việt và không gọi công cụ. Chỉ phân tích số liệu do backend cung cấp. Khi phân tích thống kê, trả JSON đúng ba mảng facts, observations, limitations; nêu rõ thiếu bằng chứng trong limitations và không suy đoán nguyên nhân, số liệu, phần trăm, giao dịch hoặc danh mục.`
+const systemInstructions = `Bạn là bộ phân tích cho sổ thu chi cá nhân. Chỉ dùng bảy công cụ được cung cấp; không truy cập SQL, không tự đặt danh tính, không tự tạo dữ liệu. Dùng VND và múi giờ Asia/Ho_Chi_Minh. Với giao dịch rõ ràng, suy ra expense từ ngôn ngữ chi tiêu và income từ luong, nhan tien, thu nhap; suy ra food cho pho, bun, com, ca phe, bia; transport cho xang, taxi, Grab; health cho thuoc, kham benh; utilities cho dien, nuoc, internet. Suy ra ngày hiện tại khi backend bỏ trống; không tự bịa số tiền, không làm tròn số tiền gần đúng, không đoán tổng tiền theo từng món. Dùng other chỉ khi người dùng nói khac hoặc khong phan loai. Nếu thiếu hoặc mơ hồ giá trị bắt buộc, hỏi lại bằng tiếng Việt và không gọi công cụ. Chỉ phân tích số liệu do backend cung cấp. Khi phân tích thống kê, trả JSON đúng ba mảng facts, observations, limitations; nêu rõ thiếu bằng chứng trong limitations và không suy đoán nguyên nhân, số liệu, phần trăm, giao dịch hoặc danh mục.`

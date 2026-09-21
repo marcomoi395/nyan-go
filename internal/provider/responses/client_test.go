@@ -102,6 +102,39 @@ func TestRespondIgnoresReasoningOutput(t *testing.T) {
 	}
 }
 
+func TestRespondParsesNumericUsage(t *testing.T) {
+	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+		return jsonResponse(map[string]any{"id": "resp_1", "output_text": "ok", "output": []any{}, "usage": map[string]any{"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}}), nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Respond(context.Background(), app.ProviderRequest{Message: "x"})
+	if err != nil || response.Usage == nil || response.Usage.TotalTokens != 7 {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+type usageRecorder struct{ record UsageRecord }
+
+func (r *usageRecorder) RecordUsage(record UsageRecord) { r.record = record }
+
+func TestRespondRecordsNumericUsageWithoutMessageContent(t *testing.T) {
+	recorder := &usageRecorder{}
+	client, err := NewClient("http://provider.test", "model", "", WithUsageRecorder(recorder), WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+		return jsonResponse(map[string]any{"id": "resp_1", "output": []any{}, "usage": map[string]any{"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}}), nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Respond(context.Background(), app.ProviderRequest{Message: "private note 25k"}); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.record.TotalTokens != 7 || recorder.record.RoundCount != 1 || recorder.record.Action != "respond" || recorder.record.Status != "success" {
+		t.Fatalf("record=%+v", recorder.record)
+	}
+}
+
 func TestRespondWithDispatcherContinuesWithOnlyFunctionOutputs(t *testing.T) {
 	var requests []responseRequest
 	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
@@ -138,6 +171,32 @@ func TestRespondWithDispatcherContinuesWithOnlyFunctionOutputs(t *testing.T) {
 	}
 	if strings.Contains(requestBody(requests[1]), "tìm giao dịch") {
 		t.Fatal("continuation repeated the original user message")
+	}
+}
+
+func TestRespondWithDispatcherStopsAfterMutationRound(t *testing.T) {
+	requests := 0
+	client, err := NewClient("http://provider.test", "model", "", WithHTTPClient(&http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if requests > 1 {
+			return nil, errors.New("unexpected continuation after mutation")
+		}
+		return jsonResponse(map[string]any{
+			"id":     "resp_1",
+			"output": []any{map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "create_transaction", "arguments": `{"type":"expense","amount_vnd":45000,"category":"food"}`}},
+		}), nil
+	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.RespondWithDispatcher(context.Background(), app.ProviderRequest{Message: "bun mam 45k"}, func(_ context.Context, _ app.FunctionCall) (string, error) {
+		return `{"queued":true}`, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || len(response.FunctionCalls) != 1 {
+		t.Fatalf("requests=%d response=%+v", requests, response)
 	}
 }
 
