@@ -97,8 +97,24 @@ func TestExportCSVExcludesDeleted(t *testing.T) {
 
 func TestConfirmMutationsVietnameseAndAmountFormatting(t *testing.T) {
 	text := ConfirmMutations([]ledger.Transaction{{Type: ledger.TransactionExpense, AmountVND: 1_200_000, Category: ledger.CategoryFood, Note: "trưa"}})
-	if !strings.Contains(text, "Đã ghi giao dịch") || !strings.Contains(text, "1.200.000 VND") || strings.Contains(text, "food") || !strings.Contains(text, "an uong") {
+	if !strings.Contains(text, "Đã ghi giao dịch") || !strings.Contains(text, "1.200.000 VND") || strings.Contains(text, "food") || !strings.Contains(text, "ăn uống") || strings.Contains(text, "an uong") {
 		t.Fatalf("confirmation: %q", text)
+	}
+}
+
+func TestCategoryLabelsUseVietnameseDiacritics(t *testing.T) {
+	expected := map[ledger.Category]string{
+		ledger.CategorySalary: "lương", ledger.CategoryBonus: "thưởng", ledger.CategoryFreelance: "freelance",
+		ledger.CategoryBusiness: "kinh doanh", ledger.CategoryInvestmentReturn: "đầu tư", ledger.CategoryRefund: "hoàn tiền", ledger.CategoryGift: "quà tặng",
+		ledger.CategoryFood: "ăn uống", ledger.CategoryTransport: "đi lại", ledger.CategoryHousing: "nhà ở", ledger.CategoryUtilities: "tiện ích",
+		ledger.CategoryShopping: "mua sắm", ledger.CategoryHealth: "sức khỏe", ledger.CategoryEducation: "giáo dục", ledger.CategoryEntertainment: "giải trí",
+		ledger.CategoryTravel: "du lịch", ledger.CategoryInsurance: "bảo hiểm", ledger.CategoryTaxFee: "thuế phí", ledger.CategoryFamily: "gia đình",
+		ledger.CategoryPet: "thú cưng", ledger.CategoryWork: "công việc", ledger.CategoryDebtFinance: "nợ tài chính", ledger.CategoryOther: "khác",
+	}
+	for category, want := range expected {
+		if got := categoryLabel(category); got != want {
+			t.Errorf("categoryLabel(%q) = %q, want %q", category, got, want)
+		}
 	}
 }
 

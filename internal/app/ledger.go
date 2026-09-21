@@ -592,14 +592,14 @@ func ConfirmMutationBatch(mutations []Mutation, transactions []ledger.Transactio
 
 func categoryLabel(value ledger.Category) string {
 	labels := map[ledger.Category]string{
-		ledger.CategoryFood: "an uong", ledger.CategoryTransport: "di lai", ledger.CategoryHousing: "nha o",
-		ledger.CategoryUtilities: "tien ich", ledger.CategoryShopping: "mua sam", ledger.CategoryHealth: "suc khoe",
-		ledger.CategoryEducation: "giao duc", ledger.CategoryEntertainment: "giai tri", ledger.CategoryTravel: "du lich",
-		ledger.CategoryInsurance: "bao hiem", ledger.CategoryTaxFee: "thue phi", ledger.CategoryFamily: "gia dinh",
-		ledger.CategoryPet: "thu cung", ledger.CategoryWork: "cong viec", ledger.CategoryDebtFinance: "no tai chinh",
-		ledger.CategoryOther: "khac", ledger.CategorySalary: "luong", ledger.CategoryBonus: "thuong",
-		ledger.CategoryFreelance: "freelance", ledger.CategoryBusiness: "kinh doanh", ledger.CategoryInvestmentReturn: "dau tu",
-		ledger.CategoryRefund: "hoan tien", ledger.CategoryGift: "qua tang",
+		ledger.CategoryFood: "ăn uống", ledger.CategoryTransport: "đi lại", ledger.CategoryHousing: "nhà ở",
+		ledger.CategoryUtilities: "tiện ích", ledger.CategoryShopping: "mua sắm", ledger.CategoryHealth: "sức khỏe",
+		ledger.CategoryEducation: "giáo dục", ledger.CategoryEntertainment: "giải trí", ledger.CategoryTravel: "du lịch",
+		ledger.CategoryInsurance: "bảo hiểm", ledger.CategoryTaxFee: "thuế phí", ledger.CategoryFamily: "gia đình",
+		ledger.CategoryPet: "thú cưng", ledger.CategoryWork: "công việc", ledger.CategoryDebtFinance: "nợ tài chính",
+		ledger.CategoryOther: "khác", ledger.CategorySalary: "lương", ledger.CategoryBonus: "thưởng",
+		ledger.CategoryFreelance: "freelance", ledger.CategoryBusiness: "kinh doanh", ledger.CategoryInvestmentReturn: "đầu tư",
+		ledger.CategoryRefund: "hoàn tiền", ledger.CategoryGift: "quà tặng",
 	}
 	if label, ok := labels[value]; ok {
 		return label
