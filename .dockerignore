@@ -1,0 +1,8 @@
+.env
+.git
+.agents
+.codex
+.scratch
+*.db
+*.db-shm
+*.db-wal

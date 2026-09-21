@@ -1,0 +1,16 @@
+services:
+  nyan-go:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      SQLITE_PATH: /data/nyan-go.db
+    volumes:
+      - nyan-go-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  nyan-go-data:
