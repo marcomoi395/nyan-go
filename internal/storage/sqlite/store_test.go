@@ -75,7 +75,39 @@ func TestSearchLimitAndStatisticsBoundaries(t *testing.T) {
 		t.Fatalf("search limit: %v %#v", err, result)
 	}
 	stats, err := store.Statistics(ctx, StatisticsFilter{UserID: "user", GuildID: "guild", ChannelID: "channel", Start: start, End: start.Add(24 * time.Hour), Group: "day"})
-	if err != nil || stats.TransactionCount != 21 || stats.TotalExpense != 21 || len(stats.Groups) != 1 {
+	if err != nil || stats.TransactionCount != 21 || stats.TotalExpense != 21 || len(stats.Groups) != 2 {
 		t.Fatalf("statistics: %v %#v", err, stats)
+	}
+}
+
+func TestSearchPaginationAndLocalDayGrouping(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		occurred := time.Date(2026, 9, 20, i, 0, 0, 0, time.UTC)
+		if _, err := store.CreateBatch(ctx, testRequest("page-"+string(rune('a'+i))), []ledger.TransactionInput{testInput(ledger.AmountVND(i+1), ledger.CategoryFood, occurred)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := store.Search(ctx, SearchFilter{UserID: "user", GuildID: "guild", ChannelID: "channel", Limit: 2, Offset: 2})
+	if err != nil || len(page.Transactions) != 2 || page.Total != 5 || !page.Truncated || page.Transactions[0].AmountVND != 3 {
+		t.Fatalf("pagination: %v %#v", err, page)
+	}
+
+	local, err := time.LoadLocation("Asia/Ho_Chi_Minh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 9, 20, 0, 0, 0, 0, local)
+	end := start.AddDate(0, 0, 2)
+	if _, err := store.CreateBatch(ctx, testRequest("local-day"), []ledger.TransactionInput{
+		testInput(10, ledger.CategoryFood, time.Date(2026, 9, 20, 16, 30, 0, 0, time.UTC)),
+		testInput(20, ledger.CategoryFood, time.Date(2026, 9, 20, 17, 30, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := store.Statistics(ctx, StatisticsFilter{UserID: "user", GuildID: "guild", ChannelID: "channel", Start: start, End: end, Group: "day"})
+	if err != nil || len(stats.Groups) != 2 || stats.Groups[0].Key != "2026-09-20" || stats.Groups[1].Key != "2026-09-21" {
+		t.Fatalf("local day grouping: %v %#v", err, stats.Groups)
 	}
 }

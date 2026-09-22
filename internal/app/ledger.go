@@ -48,6 +48,8 @@ type SearchRequest struct {
 	NoteContains string
 	MinAmountVND ledger.AmountVND
 	MaxAmountVND ledger.AmountVND
+	Limit        int
+	Offset       int
 }
 
 type StatisticsRequest struct {
@@ -472,6 +474,7 @@ func (s *LedgerService) searchFilter(request ledger.RequestContext, input Search
 		UserID: request.UserID, GuildID: request.GuildID, ChannelID: request.ChannelID,
 		Start: localIfSet(input.Start, s.loc), End: localIfSet(input.End, s.loc), Type: input.Type, Category: input.Category,
 		NoteContains: input.NoteContains, MinAmountVND: input.MinAmountVND, MaxAmountVND: input.MaxAmountVND,
+		Limit: input.Limit, Offset: input.Offset,
 	}
 	if input.Start.IsZero() != input.End.IsZero() || (!input.Start.IsZero() && !input.Start.Before(input.End)) {
 		return sqlite.SearchFilter{}, clarification("Khoảng thời gian tìm kiếm chưa hợp lệ; hãy cho biết mốc bắt đầu và kết thúc.")

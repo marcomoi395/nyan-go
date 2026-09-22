@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ const (
 	ApplicationTimezone     = "Asia/Ho_Chi_Minh"
 	DefaultReminderTime     = "20:30"
 	DefaultReminderCooldown = 24 * time.Hour
+	DefaultWebAddr          = "127.0.0.1:8080"
 )
 
 var requiredKeys = []string{
@@ -38,6 +40,7 @@ type Config struct {
 	OpenAIAPIKey     string
 	OpenAIModel      string
 	SQLitePath       string
+	WebAddr          string
 
 	ReminderEnabled  bool
 	ReminderTime     string
@@ -109,13 +112,32 @@ func fromValues(values map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("load application timezone: %w", err)
 	}
+	webAddr := strings.TrimSpace(values["WEB_ADDR"])
+	if webAddr == "" {
+		webAddr = DefaultWebAddr
+	}
+	if err := validateWebAddr(webAddr); err != nil {
+		return Config{}, fmt.Errorf("WEB_ADDR: %w", err)
+	}
 	return Config{
 		DiscordToken: values["DISCORD_TOKEN"], DiscordGuildID: values["DISCORD_GUILD_ID"],
 		DiscordUserID: values["DISCORD_USER_ID"], DiscordChannelID: values["DISCORD_CHANNEL_ID"],
 		OpenAIBaseURL: baseURL, OpenAIAPIKey: values["OPENAI_API_KEY"], OpenAIModel: values["OPENAI_MODEL"],
-		SQLitePath: values["SQLITE_PATH"], ReminderEnabled: reminderEnabled, ReminderTime: reminderTime,
+		SQLitePath: values["SQLITE_PATH"], WebAddr: webAddr, ReminderEnabled: reminderEnabled, ReminderTime: reminderTime,
 		ReminderCooldown: cooldown, Location: location,
 	}, nil
+}
+
+func validateWebAddr(value string) error {
+	host, portText, err := net.SplitHostPort(value)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return errors.New("expected host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func validateSQLitePath(raw string) error {

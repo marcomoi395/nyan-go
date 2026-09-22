@@ -12,4 +12,6 @@ RUN apk add --no-cache tzdata
 WORKDIR /app
 COPY --from=build /nyan-go /usr/local/bin/nyan-go
 
+EXPOSE 8080
+
 ENTRYPOINT ["nyan-go"]

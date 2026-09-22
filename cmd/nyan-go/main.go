@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"nyan-go/internal/provider/responses"
 	"nyan-go/internal/reminder"
 	"nyan-go/internal/storage/sqlite"
+	"nyan-go/internal/web"
 )
 
 func main() {
@@ -40,6 +43,13 @@ func run() error {
 		return err
 	}
 	service, err := app.NewLedgerService(store, cfg.Location)
+	if err != nil {
+		return err
+	}
+	webHandler, err := web.New(web.Config{
+		Service: service, UserID: cfg.DiscordUserID, GuildID: cfg.DiscordGuildID,
+		ChannelID: cfg.DiscordChannelID, Location: cfg.Location,
+	})
 	if err != nil {
 		return err
 	}
@@ -138,21 +148,34 @@ func run() error {
 		return err
 	}
 	defer session.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	httpServer := &http.Server{
+		Addr: cfg.WebAddr, Handler: webHandler, ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: time.Minute,
+	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		log.Printf("action=web_listen address=%s", cfg.WebAddr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- err
+		}
+	}()
 	if cfg.ReminderEnabled {
 		scheduler, scheduleErr := reminder.NewScheduler(store, sender, reminder.Config{UserID: cfg.DiscordUserID, GuildID: cfg.DiscordGuildID, ChannelID: cfg.DiscordChannelID, ReminderTime: cfg.ReminderTime, ReminderCooldown: cfg.ReminderCooldown, Location: cfg.Location}, systemClock{})
 		if scheduleErr != nil {
 			return scheduleErr
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		defer stop()
 		go func() { _ = scheduler.Run(ctx) }()
-		<-ctx.Done()
-		return nil
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	<-ctx.Done()
-	return nil
+	select {
+	case <-ctx.Done():
+	case serveErr := <-serverErrors:
+		return serveErr
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return httpServer.Shutdown(shutdownCtx)
 }
 
 type systemClock struct{}
