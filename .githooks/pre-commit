@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -eu
+
+# ponytail: staged files must not have unstaged hunks; add index-preserving formatting if partial staging becomes routine.
+git diff --cached --name-only -z --diff-filter=ACMR -- '*.go' | xargs -0 -r gofmt -w
+git diff --cached --name-only -z --diff-filter=ACMR -- '*.go' | xargs -0 -r git add --

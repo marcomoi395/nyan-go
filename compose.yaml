@@ -1,6 +1,6 @@
 services:
   nyan-go:
-    build: .
+    image: ghcr.io/marcomoi395/nyan-go:latest
     restart: unless-stopped
     init: true
     env_file: .env
