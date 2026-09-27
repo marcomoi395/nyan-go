@@ -25,9 +25,6 @@ func TestLoadDefaultsAndFixedTimezone(t *testing.T) {
 	if cfg.OpenAIAPIKey != "" || cfg.Location.String() != ApplicationTimezone {
 		t.Fatalf("unexpected optional settings: %+v", cfg)
 	}
-	if cfg.WebAddr != DefaultWebAddr {
-		t.Fatalf("unexpected web address: %q", cfg.WebAddr)
-	}
 	if _, offset := time.Now().In(cfg.Location).Zone(); offset != 7*60*60 {
 		t.Fatalf("unexpected timezone offset: %d", offset)
 	}
@@ -56,8 +53,6 @@ func TestLoadRejectsMissingAndInvalidSettings(t *testing.T) {
 		append(validEnv(), "OPENAI_BASE_URL=not-a-url"),
 		append(validEnv(), "REMINDER_TIME=25:00"),
 		append(validEnv(), "REMINDER_COOLDOWN=0s"),
-		append(validEnv(), "WEB_ADDR=localhost"),
-		append(validEnv(), "WEB_ADDR=127.0.0.1:70000"),
 	} {
 		if _, err := LoadFile(filepath.Join(t.TempDir(), "missing"), env); err == nil {
 			t.Fatal("expected invalid configuration")

@@ -24,8 +24,6 @@ type SearchFilter struct {
 	MinAmountVND   ledger.AmountVND
 	MaxAmountVND   ledger.AmountVND
 	IncludeDeleted bool
-	Limit          int
-	Offset         int
 }
 
 type SearchResult struct {
@@ -35,13 +33,6 @@ type SearchResult struct {
 }
 
 func (s *Store) Search(ctx context.Context, filter SearchFilter) (SearchResult, error) {
-	limit := filter.Limit
-	if limit == 0 {
-		limit = maxSearchRows
-	}
-	if limit < 1 || limit > 100 || filter.Offset < 0 {
-		return SearchResult{}, errors.New("invalid search pagination")
-	}
 	where, args, err := transactionWhere(filter.UserID, filter.GuildID, filter.ChannelID, filter.Start, filter.End, filter.Type, filter.Category, filter.NoteContains, filter.MinAmountVND, filter.MaxAmountVND, filter.IncludeDeleted)
 	if err != nil {
 		return SearchResult{}, err
@@ -50,8 +41,8 @@ func (s *Store) Search(ctx context.Context, filter SearchFilter) (SearchResult, 
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transactions WHERE `+where, args...).Scan(&total); err != nil {
 		return SearchResult{}, fmt.Errorf("count transactions: %w", err)
 	}
-	queryArgs := append(append([]any{}, args...), limit, filter.Offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE `+where+` ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`, queryArgs...)
+	queryArgs := append(append([]any{}, args...), maxSearchRows)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+transactionColumns+` FROM transactions WHERE `+where+` ORDER BY occurred_at DESC, id DESC LIMIT ?`, queryArgs...)
 	if err != nil {
 		return SearchResult{}, fmt.Errorf("search transactions: %w", err)
 	}
@@ -60,7 +51,7 @@ func (s *Store) Search(ctx context.Context, filter SearchFilter) (SearchResult, 
 	if err != nil {
 		return SearchResult{}, err
 	}
-	return SearchResult{Transactions: transactions, Total: total, Truncated: total > filter.Offset+len(transactions)}, nil
+	return SearchResult{Transactions: transactions, Total: total, Truncated: total > len(transactions)}, nil
 }
 
 func (s *Store) Get(ctx context.Context, request ledger.RequestContext, id int64) (ledger.Transaction, error) {
@@ -191,7 +182,7 @@ func (s *Store) statisticsQuery(ctx context.Context, where string, args []any, g
 	if group == "total" {
 		return result, nil
 	}
-	groupExpr := map[string]string{"day": `date(occurred_at, '+7 hours')`, "category": "category", "type": "type"}[group]
+	groupExpr := map[string]string{"day": `substr(occurred_at, 1, 10)`, "category": "category", "type": "type"}[group]
 	query := `SELECT ` + groupExpr + `, COUNT(*), COALESCE(SUM(CASE WHEN type = 'income' THEN amount_vnd ELSE 0 END), 0), COALESCE(SUM(CASE WHEN type = 'expense' THEN amount_vnd ELSE 0 END), 0) FROM transactions WHERE ` + where + ` GROUP BY ` + groupExpr + ` ORDER BY ` + groupExpr
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
