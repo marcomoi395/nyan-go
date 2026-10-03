@@ -1,6 +1,21 @@
 Status: ready-for-agent
+Implementation: complete
+Completed: 2026-10-03
 
 # Web gửi tin nhắn và file qua Discord webhook
+
+## Tasks
+
+- [x] Tạo service Go riêng trong `discord-webhook`, dùng thư viện chuẩn.
+- [x] Đọc mật khẩu/webhook từ biến môi trường, kiểm tra cấu hình và giữ bí mật ở server.
+- [x] Xác thực mật khẩu ở server trước khi mở màn hình post; xác thực lại mỗi yêu cầu gửi và giới hạn lần thử sai.
+- [x] Gửi text, một file hoặc cả hai; giới hạn 2.000 ký tự/20 MiB; tắt mentions và chờ Discord xác nhận.
+- [x] Xử lý lỗi, rate limit, timeout; giới hạn tài nguyên và dọn file tạm.
+- [x] Giao diện tiếng Việt 8bit Nyan Cat; bộ đếm, trạng thái, nút chọn tệp tùy biến và nút bỏ tệp nhỏ bên phải.
+- [x] Tích hợp Docker Compose độc lập; cấu hình local dùng cổng `8081`.
+- [x] Kiểm thử HTTP với Discord giả lập, chạy `make ci`, rà soát standards/spec.
+- [x] Kiểm tra màn hình đăng nhập, chọn/bỏ tệp và bố cục điện thoại; người dùng xác nhận hoạt động.
+- [x] Commit triển khai: `f108b1a`; commit chỉnh giao diện/xác thực: `09af950`.
 
 ## Problem Statement
 
@@ -114,6 +129,10 @@ Giao diện dùng HTML/CSS đơn giản, pixel art Nyan Cat và cầu vồng. Do
 - Đã đối chiếu [File Attachments FAQ](https://support.discord.com/hc/en-us/articles/25444343291031-File-Attachments-FAQ): tài khoản không Nitro có mức upload 20 MB theo cách diễn đạt của trang hỗ trợ, được tăng từ tháng 08/2026.
 - [Discord API — Uploading Files](https://docs.discord.com/developers/reference#uploading-files) xác định giới hạn mặc định theo từng file là 20 MiB. Spec dùng giá trị byte của tài liệu API để triển khai, không dùng mức cũ 10 MB.
 - [Webhook Resource — Execute Webhook](https://docs.discord.com/developers/resources/webhook#execute-webhook) xác nhận content tối đa 2.000 ký tự, hỗ trợ file multipart và tùy chọn chờ xác nhận.
-- URL người dùng cung cấp đúng dạng webhook nhưng chưa gọi GET xác minh token, tên/kênh hoặc loại kênh, cũng chưa gửi tin nhắn/file thử. Tính hoạt động của token chưa được xác nhận.
+- Tại thời điểm lập spec, URL người dùng cung cấp đúng dạng webhook nhưng chưa gọi GET xác minh token, tên/kênh hoặc loại kênh, cũng chưa gửi tin nhắn/file thử. Kiểm thử tự động và kiểm tra giao diện sau triển khai dùng Discord giả lập; người dùng đã xác nhận ứng dụng hoạt động.
 - Không sao chép URL chứa token vào issue tracker. Khi triển khai được cho phép, cấu hình webhook qua biến môi trường; người vận hành tự cung cấp mật khẩu.
 - Người dùng đã xác nhận điểm kiểm thử HTTP toàn luồng với Discord giả lập. Không bổ sung một tầng kiểm thử client riêng.
+
+## Comments
+
+- 2026-10-03: Đã hoàn thiện triển khai và ba yêu cầu chỉnh giao diện. Người dùng xác nhận hoạt động, yêu cầu đánh dấu hoàn thành. `Implementation: complete` ghi tiến độ; `Status` giữ nhãn triage theo quy ước repo. Tính năng này chưa có ticket/task riêng, checklist nằm trong spec.
