@@ -11,6 +11,22 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+  discord-webhook:
+    image: ghcr.io/marcomoi395/nyan-go:latest
+    build:
+      context: .
+    entrypoint: ["nyan-webhook"]
+    restart: unless-stopped
+    init: true
+    profiles: ["web"]
+    environment:
+      DISCORD_WEB_PASSWORD: ${DISCORD_WEB_PASSWORD:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    ports:
+      - "127.0.0.1:${DISCORD_WEB_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=48m,mode=1777
 
 volumes:
   nyan-go-data:
