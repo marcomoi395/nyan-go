@@ -13,6 +13,22 @@ services:
       - nyan-go-dev-data:/data
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
+  discord-webhook:
+    image: golang:1.27-alpine
+    working_dir: /src
+    command: go run ./discord-webhook
+    restart: unless-stopped
+    init: true
+    profiles: ["web"]
+    environment:
+      DISCORD_WEB_PASSWORD: ${DISCORD_WEB_PASSWORD:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    ports:
+      - "127.0.0.1:${DISCORD_WEB_PORT:-8080}:8080"
+    volumes:
+      - .:/src
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
 
 volumes:
   nyan-go-dev-data:
