@@ -10,7 +10,7 @@ Repo hiện có bot Discord viết bằng Go, lưu dữ liệu thu chi trong SQL
 
 ## Solution
 
-Thêm một web service Go trong thư mục tính năng riêng, dùng module Go hiện có. Trang web tiếng Việt có ô mật khẩu, ô nội dung, chọn file và nút gửi; hiển thị trạng thái đang gửi, thành công hoặc lỗi.
+Thêm một web service Go trong thư mục tính năng riêng, dùng module Go hiện có. Trang web tiếng Việt bắt đầu với màn hình đăng nhập; chỉ hiện biểu mẫu post sau khi server xác thực mật khẩu. Biểu mẫu có ô nội dung, chọn file và nút gửi; hiển thị trạng thái đang gửi, thành công hoặc lỗi.
 
 Backend kiểm tra mật khẩu từ biến môi trường trước khi cho phép gửi, giữ URL webhook ở phía server và chuyển nội dung/file sang Discord. Người dùng có thể gửi chỉ chữ, chỉ file hoặc cả hai. Giới hạn nội dung là 2.000 ký tự; giới hạn file mặc định là 20 MiB theo tài liệu Discord đã đối chiếu.
 
@@ -63,9 +63,9 @@ Giao diện dùng HTML/CSS đơn giản, pixel art Nyan Cat và cầu vồng. Do
 - **Tổ chức:** Một thư mục tính năng riêng tên `discord-webhook`, dùng module Go hiện có. Web có executable riêng; không ghép vào vòng lặp bot thu chi và không thêm database.
 - **Công nghệ:** Ưu tiên thư viện chuẩn Go cho HTTP, multipart, JSON, biến môi trường và phục vụ giao diện. Không thêm framework frontend/backend hoặc dependency chỉ để gửi webhook.
 - **Cấu hình bắt buộc:** `DISCORD_WEB_PASSWORD` và `DISCORD_WEBHOOK_URL`. Thiếu hoặc rỗng thì dừng startup; thông báo lỗi chỉ nêu tên biến, không chứa giá trị bí mật. Chỉ chấp nhận URL HTTPS của Discord với webhook ID/token đúng cấu trúc; không nhận URL đích từ trình duyệt.
-- **Giao diện:** Trang tiếng Việt gồm mật khẩu, nội dung, bộ đếm ký tự, một ô chọn file, tên/dung lượng file, thao tác bỏ file, nút gửi và vùng trạng thái. Pixel art Nyan Cat/cầu vồng dùng tài nguyên local hoặc CSS; không cần CDN, asset sinh bằng AI hoặc hệ thống thiết kế mới.
+- **Giao diện:** Màn hình đăng nhập tiếng Việt trước biểu mẫu post. Nút chọn tệp tùy biến theo theme 8bit thay cho control mặc định; nút bỏ tệp nhỏ nằm bên phải tiêu đề tệp đính kèm. Biểu mẫu gồm nội dung, bộ đếm ký tự, tên/dung lượng file, nút gửi và vùng trạng thái. Pixel art Nyan Cat/cầu vồng dùng tài nguyên local hoặc CSS; không cần CDN, asset sinh bằng AI hoặc hệ thống thiết kế mới.
 - **Số lượng file:** Bản đầu hỗ trợ một file mỗi lần gửi để giữ giao diện và upload đơn giản. Đây là giới hạn của ứng dụng, không phải khẳng định giới hạn số attachment của Discord.
-- **Hợp đồng HTTP:** Một endpoint gửi nhận multipart gồm nội dung và file tùy chọn. Mật khẩu truyền trong header xác thực; không đưa mật khẩu vào URL hoặc lưu ở localStorage. Backend xác thực mọi yêu cầu gửi trước khi đọc phần upload lớn hoặc gọi Discord.
+- **Hợp đồng HTTP:** `POST /auth` kiểm tra mật khẩu trước khi mở màn hình post, không gọi Discord. Endpoint gửi nhận multipart gồm nội dung và file tùy chọn. Mật khẩu truyền trong header xác thực, giữ trong bộ nhớ trang đến khi tải lại; không đưa mật khẩu vào URL hoặc lưu ở localStorage. Backend xác thực mọi yêu cầu gửi trước khi đọc phần upload lớn hoặc gọi Discord.
 - **Xác thực:** So sánh mật khẩu bằng phương thức thời gian hằng. Giới hạn các lần thử sai; không thêm tài khoản, đăng ký, OAuth, JWT hay kho session.
 - **Ranh giới trình duyệt:** Không bật CORS tùy ý. Kiểm soát origin và dùng header xác thực không tự được trình duyệt đính kèm để tránh gửi ngoài ý muốn từ website khác. Khi truy cập qua mạng công cộng, lớp triển khai phải cung cấp HTTPS.
 - **Nội dung:** Chấp nhận text-only, file-only hoặc text kèm file. Từ chối khi không có file và nội dung chỉ là khoảng trắng. Kiểm tra Unicode hợp lệ, giữ nội dung gốc khi gửi và thống nhất cách đếm 2.000 ký tự giữa frontend/backend, bao gồm tiếng Việt và emoji.

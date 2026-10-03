@@ -13,6 +13,34 @@ import (
 	"testing"
 )
 
+func TestLoginValidatesPasswordWithoutCallingWebhook(t *testing.T) {
+	calls := 0
+	handler := newHandler("mật khẩu", "https://discord.com/api/webhooks/123/secret", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, nil
+	})})
+	for _, tc := range []struct {
+		password string
+		want     int
+	}{{"", http.StatusUnauthorized}, {"wrong", http.StatusUnauthorized}, {"mật khẩu", http.StatusOK}} {
+		request := httptest.NewRequest(http.MethodPost, "/auth", nil)
+		request.Header.Set("X-Webhook-Password", base64.StdEncoding.EncodeToString([]byte(tc.password)))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != tc.want || calls != 0 {
+			t.Fatalf("login status=%d webhook calls=%d, want %d and no send", response.Code, calls, tc.want)
+		}
+		if tc.want == http.StatusOK && !strings.Contains(response.Body.String(), `"success":true`) {
+			t.Fatalf("login success missing from response: %s", response.Body.String())
+		}
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/send", nil))
+	if response.Code != http.StatusUnauthorized || calls != 0 {
+		t.Fatalf("send after login without credential status=%d webhook calls=%d", response.Code, calls)
+	}
+}
+
 func TestWebhookSendAuthenticatesAndForwardsMultipart(t *testing.T) {
 	var gotBody []byte
 	var gotContentType string
