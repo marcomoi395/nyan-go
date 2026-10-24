@@ -144,9 +144,14 @@ func (s *Store) Delete(ctx context.Context, id int64) (Note, error) {
 	if id <= 0 {
 		return Note{}, fmt.Errorf("note ID must be positive: %w", ErrInvalid)
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Note{}, fmt.Errorf("begin delete note: %w", err)
+	}
+	defer tx.Rollback()
 	var note Note
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id).Scan(&note.ID, &note.Content, &createdAt, &updatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id).Scan(&note.ID, &note.Content, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Note{}, ErrNotFound
 	}
@@ -161,7 +166,18 @@ func (s *Store) Delete(ctx context.Context, id int64) (Note, error) {
 	if err != nil {
 		return Note{}, fmt.Errorf("parse note update time: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id); err != nil {
+	result, err := tx.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id)
+	if err != nil {
+		return Note{}, fmt.Errorf("delete note: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return Note{}, fmt.Errorf("check deleted note: %w", err)
+	}
+	if changed != 1 {
+		return Note{}, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
 		return Note{}, fmt.Errorf("delete note: %w", err)
 	}
 	return note, nil
