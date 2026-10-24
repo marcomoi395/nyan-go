@@ -35,7 +35,6 @@ const (
 	maxConcurrent    = 2
 	maxPasswordFails = 5
 	passwordWindow   = time.Minute
-	maxNotePageSize  = 100
 	defaultNoteLimit = 50
 	maxNoteBodyBytes = 64 << 10
 )
@@ -118,7 +117,7 @@ func (s *webhookSender) handleListNotes(w http.ResponseWriter, r *http.Request) 
 	limit := defaultNoteLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > maxNotePageSize {
+		if err != nil || parsed < 1 || parsed > notestore.MaxPageSize {
 			writeError(w, http.StatusBadRequest, "Số lượng ghi chú cần tải không hợp lệ.", 0)
 			return
 		}

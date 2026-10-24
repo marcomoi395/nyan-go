@@ -31,7 +31,7 @@ func TestNotesPersistAndSupportCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	listed, err := store.List(context.Background(), 0, pageSize)
+	listed, err := store.List(context.Background(), 0, MaxPageSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestNotesRejectInvalidContentAndBoundList(t *testing.T) {
 			t.Fatalf("Create(%d runes) error=%v, want ErrInvalid", len([]rune(content)), err)
 		}
 	}
-	for _, tc := range []struct{ offset, limit int }{{-1, 10}, {0, 0}, {0, pageSize + 2}} {
+	for _, tc := range []struct{ offset, limit int }{{-1, 10}, {0, 0}, {0, MaxPageSize + 2}} {
 		if _, err := store.List(context.Background(), tc.offset, tc.limit); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("List(%d,%d) error=%v, want ErrInvalid", tc.offset, tc.limit, err)
 		}

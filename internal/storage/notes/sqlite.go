@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	driverName = "sqlite"
-	MaxRunes   = 10000
-	pageSize   = 100
+	driverName  = "sqlite"
+	MaxRunes    = 10000
+	MaxPageSize = 100
 )
 
 var (
@@ -76,7 +76,7 @@ func (s *Store) Create(ctx context.Context, content string) (Note, error) {
 }
 
 func (s *Store) List(ctx context.Context, offset, limit int) ([]Note, error) {
-	if offset < 0 || limit < 1 || limit > pageSize+1 {
+	if offset < 0 || limit < 1 || limit > MaxPageSize+1 {
 		return nil, fmt.Errorf("invalid note page: %w", ErrInvalid)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, content, created_at, updated_at FROM notes ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`, limit, offset)
