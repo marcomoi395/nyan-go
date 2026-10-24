@@ -22,11 +22,14 @@ services:
     environment:
       DISCORD_WEB_PASSWORD: ${DISCORD_WEB_PASSWORD:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      NYAN_POST_SQLITE_PATH: /data/nyan-post.db
     ports:
       - "127.0.0.1:${DISCORD_WEB_PORT:-8080}:8080"
     read_only: true
     tmpfs:
       - /tmp:size=48m,mode=1777
+    volumes:
+      - nyan-go-data:/data
 
 volumes:
   nyan-go-data:

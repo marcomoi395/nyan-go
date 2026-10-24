@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	notestore "nyan-go/internal/storage/notes"
 )
 
 func main() {
@@ -29,8 +31,17 @@ func run() error {
 	if !validWebhookURL(webhookURL) {
 		return errors.New("DISCORD_WEBHOOK_URL must be an HTTPS Discord webhook URL")
 	}
+	notesPath := os.Getenv("NYAN_POST_SQLITE_PATH")
+	if strings.TrimSpace(notesPath) == "" {
+		return errors.New("missing required configuration NYAN_POST_SQLITE_PATH")
+	}
+	notes, err := notestore.Open(notesPath)
+	if err != nil {
+		return err
+	}
+	defer notes.Close()
 	server := &http.Server{
-		Addr: ":8080", Handler: newHandler(password, webhookURL, &http.Client{Timeout: 30 * time.Second}),
+		Addr: ":8080", Handler: newHandler(password, webhookURL, &http.Client{Timeout: 30 * time.Second}, notes),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
 		WriteTimeout: 45 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
 	}

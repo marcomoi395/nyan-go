@@ -23,10 +23,12 @@ services:
     environment:
       DISCORD_WEB_PASSWORD: ${DISCORD_WEB_PASSWORD:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      NYAN_POST_SQLITE_PATH: /data/nyan-post.db
     ports:
       - "127.0.0.1:${DISCORD_WEB_PORT:-8080}:8080"
     volumes:
       - .:/src
+      - nyan-go-dev-data:/data
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
 
