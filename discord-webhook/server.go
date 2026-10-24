@@ -58,7 +58,7 @@ type notesRepository interface {
 	Create(context.Context, string) (notestore.Note, error)
 	List(context.Context, int, int) ([]notestore.Note, error)
 	Update(context.Context, int64, string) (notestore.Note, error)
-	Delete(context.Context, int64) error
+	Delete(context.Context, int64) (notestore.Note, error)
 }
 
 func newHandler(password, webhookURL string, client *http.Client, noteStores ...notesRepository) http.Handler {
@@ -162,8 +162,8 @@ func (s *webhookSender) handleCreateNote(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *webhookSender) handleUpdateNote(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
+	id, ok := parseNoteID(r.PathValue("id"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, "Mã ghi chú không hợp lệ.", 0)
 		return
 	}
@@ -180,16 +180,22 @@ func (s *webhookSender) handleUpdateNote(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *webhookSender) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
+	id, ok := parseNoteID(r.PathValue("id"))
+	if !ok {
 		writeError(w, http.StatusBadRequest, "Mã ghi chú không hợp lệ.", 0)
 		return
 	}
-	if err := s.notes.Delete(r.Context(), id); err != nil {
+	note, err := s.notes.Delete(r.Context(), id)
+	if err != nil {
 		writeNoteError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sendResponse{Success: true, Message: "Đã xóa ghi chú."})
+	writeJSON(w, http.StatusOK, noteResponse{Success: true, Message: "Đã xóa ghi chú.", Note: &note})
+}
+
+func parseNoteID(raw string) (int64, bool) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func readNoteContent(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -577,7 +583,7 @@ const pageHTML = `<!doctype html>
 <button id="send" type="submit">Gửi tới Discord ✦</button>
 <p id="status" class="status" role="status" aria-live="polite"></p>
 </form>
-<section id="notes-panel" role="tabpanel" aria-labelledby="tab-notes" tabindex="0" hidden>
+<section id="notes-panel" role="tabpanel" aria-labelledby="tab-notes" aria-busy="false" tabindex="0" hidden>
 <form id="notes-form"><label for="note-content">Ghi chú<textarea id="note-content" class="note-editor" maxlength="20000" placeholder="Viết ghi chú..." aria-describedby="note-count"></textarea></label><p class="hint" id="note-count" aria-live="polite">0 / 10.000 ký tự</p><button id="save-note" type="submit">Lưu ghi chú ✦</button><button id="cancel-edit" type="button" hidden>Hủy sửa</button></form>
 <p id="notes-status" class="status" role="status" aria-live="polite"></p><ul id="notes-list" class="notes-list"></ul><button id="load-more-notes" type="button" hidden>Tải ghi chú cũ hơn</button>
 </section></main>
@@ -627,11 +633,11 @@ tabs.addEventListener('keydown',event=>{const order=[tabSend,tabNotes],index=ord
 async function requestNotes(url,options={}){const response=await fetch(url,{...options,headers:{...(options.headers||{}),'X-Webhook-Password':credential,...(options.body?{'Content-Type':'application/json'}:{})}});const result=await response.json();if(response.status===401){credential='';tabs.hidden=true;form.hidden=true;notesPanel.hidden=true;login.hidden=false;showError(loginStatus,new Error(result.message||'Vui lòng đăng nhập lại.'));password.focus();throw new Error('Phiên đăng nhập hết hạn.')}if(!response.ok)throw new Error(result.message||'Không xử lý được ghi chú.');return result}
 function setNoteStatus(message,kind=''){notesStatus.dataset.kind=kind;notesStatus.textContent=message}
 function formatNoteTime(value){return new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short',timeZone:'Asia/Ho_Chi_Minh'}).format(new Date(value))}
-function renderNote(note){const item=document.createElement('li');item.className='note';const text=document.createElement('p');text.className='note-content';text.textContent=note.content;const updated=document.createElement('p');updated.className='note-meta';updated.textContent='Cập nhật '+formatNoteTime(note.updated_at);const actions=document.createElement('div');actions.className='note-actions';const edit=document.createElement('button');edit.type='button';edit.textContent='Sửa';edit.setAttribute('aria-label','Sửa ghi chú '+note.id);edit.addEventListener('click',()=>{editingNoteID=note.id;noteContent.value=note.content;noteContent.dispatchEvent(new Event('input'));saveNote.textContent='Cập nhật ghi chú ✦';cancelEdit.hidden=false;noteContent.focus()});const remove=document.createElement('button');remove.type='button';remove.textContent='Xóa';remove.setAttribute('aria-label','Xóa ghi chú '+note.id);remove.addEventListener('click',async()=>{if(!confirm('Xóa ghi chú này?'))return;remove.disabled=true;try{const result=await requestNotes('/notes/'+note.id,{method:'DELETE'});setNoteStatus(result.message,'success');await loadNotes(true)}catch(error){remove.disabled=false;setNoteStatus(error.message,'error')}});actions.append(edit,remove);item.append(text,updated,actions);notesList.append(item)}
-async function loadNotes(reset){if(notesLoading)return;notesLoading=true;loadMoreNotes.disabled=true;setNoteStatus('Đang tải ghi chú…');if(reset){notesOffset=0;notesList.replaceChildren()}try{const result=await requestNotes('/notes?limit=50&offset='+notesOffset);for(const note of result.notes)renderNote(note);notesOffset=result.next_offset||notesOffset+result.notes.length;loadMoreNotes.hidden=!result.has_more;setNoteStatus(result.notes.length||notesOffset?'':'Chưa có ghi chú.')}catch(error){setNoteStatus(error.message,'error')}finally{notesLoading=false;loadMoreNotes.disabled=false}}
+function renderNote(note){const item=document.createElement('li');item.className='note';const text=document.createElement('p');text.className='note-content';text.textContent=note.content;const updated=document.createElement('p');updated.className='note-meta';updated.textContent='Cập nhật '+formatNoteTime(note.updated_at);const actions=document.createElement('div');actions.className='note-actions';const edit=document.createElement('button');edit.type='button';edit.textContent='Sửa';edit.setAttribute('aria-label','Sửa ghi chú '+note.id);edit.addEventListener('click',()=>{editingNoteID=note.id;noteContent.value=note.content;noteContent.dispatchEvent(new Event('input'));saveNote.textContent='Cập nhật ghi chú ✦';cancelEdit.hidden=false;noteContent.focus()});const remove=document.createElement('button');remove.type='button';remove.textContent='Xóa';remove.setAttribute('aria-label','Xóa ghi chú '+note.id);remove.addEventListener('click',async()=>{if(!confirm('Xóa ghi chú này?'))return;remove.disabled=true;try{const result=await requestNotes('/notes/'+note.id,{method:'DELETE'});await loadNotes(true);setNoteStatus(result.message,'success')}catch(error){remove.disabled=false;setNoteStatus(error.message,'error')}});actions.append(edit,remove);item.append(text,updated,actions);notesList.append(item)}
+async function loadNotes(reset){if(notesLoading)return;notesLoading=true;notesPanel.setAttribute('aria-busy','true');loadMoreNotes.disabled=true;setNoteStatus('Đang tải ghi chú…');if(reset){notesOffset=0;notesList.replaceChildren()}try{const result=await requestNotes('/notes?limit=50&offset='+notesOffset);for(const note of result.notes)renderNote(note);notesOffset=result.next_offset||notesOffset+result.notes.length;loadMoreNotes.hidden=!result.has_more;if(!result.notes.length&&!notesOffset)setNoteStatus('Chưa có ghi chú.')}catch(error){setNoteStatus(error.message,'error')}finally{notesLoading=false;notesPanel.setAttribute('aria-busy','false');loadMoreNotes.disabled=false}}
 loadMoreNotes.addEventListener('click',()=>loadNotes(false));
 noteContent.addEventListener('input',()=>{let runes=Array.from(noteContent.value);if(runes.length>noteLimit){noteContent.value=runes.slice(0,noteLimit).join('');runes=runes.slice(0,noteLimit)}const n=runes.length;noteCount.textContent=n.toLocaleString('vi-VN')+' / 10.000 ký tự';noteCount.style.color=n>noteLimit?'#a42648':''});
 function clearNoteEditor(){editingNoteID=null;notesForm.reset();noteContent.dispatchEvent(new Event('input'));saveNote.textContent='Lưu ghi chú ✦';cancelEdit.hidden=true}
 cancelEdit.addEventListener('click',clearNoteEditor);
-notesForm.addEventListener('submit',async event=>{event.preventDefault();const value=noteContent.value,n=Array.from(value).length;if(!value.trim()){setNoteStatus('Nhập nội dung ghi chú.','error');noteContent.focus();return}if(n>noteLimit){setNoteStatus('Ghi chú vượt giới hạn 10.000 ký tự.','error');noteContent.focus();return}saveNote.disabled=true;setNoteStatus(editingNoteID?'Đang cập nhật…':'Đang lưu…');try{const url=editingNoteID?'/notes/'+editingNoteID:'/notes',method=editingNoteID?'PUT':'POST',result=await requestNotes(url,{method,body:JSON.stringify({content:value})});clearNoteEditor();setNoteStatus(result.message,'success');await loadNotes(true)}catch(error){setNoteStatus(error.message,'error')}finally{saveNote.disabled=false}});
+notesForm.addEventListener('submit',async event=>{event.preventDefault();const value=noteContent.value,n=Array.from(value).length;if(!value.trim()){setNoteStatus('Nhập nội dung ghi chú.','error');noteContent.focus();return}if(n>noteLimit){setNoteStatus('Ghi chú vượt giới hạn 10.000 ký tự.','error');noteContent.focus();return}saveNote.disabled=true;setNoteStatus(editingNoteID?'Đang cập nhật…':'Đang lưu…');try{const url=editingNoteID?'/notes/'+editingNoteID:'/notes',method=editingNoteID?'PUT':'POST',result=await requestNotes(url,{method,body:JSON.stringify({content:value})});clearNoteEditor();await loadNotes(true);setNoteStatus(result.message,'success')}catch(error){setNoteStatus(error.message,'error')}finally{saveNote.disabled=false}});
 </script></body></html>`

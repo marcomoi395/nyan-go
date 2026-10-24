@@ -140,22 +140,31 @@ func (s *Store) Update(ctx context.Context, id int64, content string) (Note, err
 	return note, nil
 }
 
-func (s *Store) Delete(ctx context.Context, id int64) error {
+func (s *Store) Delete(ctx context.Context, id int64) (Note, error) {
 	if id <= 0 {
-		return fmt.Errorf("note ID must be positive: %w", ErrInvalid)
+		return Note{}, fmt.Errorf("note ID must be positive: %w", ErrInvalid)
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id)
+	var note Note
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id).Scan(&note.ID, &note.Content, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Note{}, ErrNotFound
+	}
 	if err != nil {
-		return fmt.Errorf("delete note: %w", err)
+		return Note{}, fmt.Errorf("read note for deletion: %w", err)
 	}
-	changed, err := result.RowsAffected()
+	note.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return fmt.Errorf("check deleted note: %w", err)
+		return Note{}, fmt.Errorf("parse note creation time: %w", err)
 	}
-	if changed == 0 {
-		return ErrNotFound
+	note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return Note{}, fmt.Errorf("parse note update time: %w", err)
 	}
-	return nil
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id); err != nil {
+		return Note{}, fmt.Errorf("delete note: %w", err)
+	}
+	return note, nil
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {

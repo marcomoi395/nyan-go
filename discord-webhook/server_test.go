@@ -390,7 +390,10 @@ func TestNotesHTTPCRUDRequiresPasswordAndPreservesText(t *testing.T) {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
 	deleted := requestNotes(t, handler, http.MethodDelete, fmt.Sprintf("/notes/%d", createdResult.Note.ID), "")
-	if deleted.Code != http.StatusOK {
+	var deletedResult struct {
+		Note notestore.Note `json:"note"`
+	}
+	if deleted.Code != http.StatusOK || json.Unmarshal(deleted.Body.Bytes(), &deletedResult) != nil || deletedResult.Note.ID != createdResult.Note.ID || deletedResult.Note.Content != "Đã sửa ✨" {
 		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
 	missing := requestNotes(t, handler, http.MethodDelete, fmt.Sprintf("/notes/%d", createdResult.Note.ID), "")

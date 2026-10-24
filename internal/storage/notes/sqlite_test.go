@@ -3,6 +3,7 @@ package notes
 import (
 	"context"
 	"errors"
+	ledgerstore "nyan-go/internal/storage/sqlite"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,11 +43,40 @@ func TestNotesPersistAndSupportCRUD(t *testing.T) {
 	if err != nil || updated.Content != "Đã sửa ✨" || updated.UpdatedAt.Before(updated.CreatedAt) {
 		t.Fatalf("updated=%#v err=%v", updated, err)
 	}
-	if err := store.Delete(context.Background(), second.ID); err != nil {
+	deleted, err := store.Delete(context.Background(), second.ID)
+	if err != nil || deleted.Content != "Ghi chú mới" || deleted.ID != second.ID {
 		t.Fatal(err)
 	}
 	if _, err := store.Update(context.Background(), second.ID, "không còn"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("updating deleted note error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestNotesDatabaseIsSeparateFromLedger(t *testing.T) {
+	dir := t.TempDir()
+	ledger, err := ledgerstore.Open(filepath.Join(dir, "ledger.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	notes, err := Open(filepath.Join(dir, "notes.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notes.Close()
+	var ledgerNotes int
+	if err := ledger.DB().QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='notes'`).Scan(&ledgerNotes); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerNotes != 0 {
+		t.Fatal("ledger database unexpectedly contains notes table")
+	}
+	var notesTransactions int
+	if err := notes.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='transactions'`).Scan(&notesTransactions); err != nil {
+		t.Fatal(err)
+	}
+	if notesTransactions != 0 {
+		t.Fatal("notes database unexpectedly contains ledger table")
 	}
 }
 
