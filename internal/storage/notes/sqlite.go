@@ -86,16 +86,9 @@ func (s *Store) List(ctx context.Context, offset, limit int) ([]Note, error) {
 	defer rows.Close()
 	notes := make([]Note, 0, limit)
 	for rows.Next() {
-		var note Note
-		var createdAt, updatedAt string
-		if err := rows.Scan(&note.ID, &note.Content, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scan note: %w", err)
-		}
-		if note.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
-			return nil, fmt.Errorf("parse note creation time: %w", err)
-		}
-		if note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
-			return nil, fmt.Errorf("parse note update time: %w", err)
+		note, err := scanNote(rows, "scan note")
+		if err != nil {
+			return nil, err
 		}
 		notes = append(notes, note)
 	}
@@ -124,18 +117,9 @@ func (s *Store) Update(ctx context.Context, id int64, content string) (Note, err
 	if changed == 0 {
 		return Note{}, ErrNotFound
 	}
-	var note Note
-	var createdAt, updatedAt string
-	if err := s.db.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id).Scan(&note.ID, &note.Content, &createdAt, &updatedAt); err != nil {
-		return Note{}, fmt.Errorf("read updated note: %w", err)
-	}
-	note.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	note, err := scanNote(s.db.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id), "read updated note")
 	if err != nil {
-		return Note{}, fmt.Errorf("parse note creation time: %w", err)
-	}
-	note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
-	if err != nil {
-		return Note{}, fmt.Errorf("parse note update time: %w", err)
+		return Note{}, err
 	}
 	return note, nil
 }
@@ -149,22 +133,12 @@ func (s *Store) Delete(ctx context.Context, id int64) (Note, error) {
 		return Note{}, fmt.Errorf("begin delete note: %w", err)
 	}
 	defer tx.Rollback()
-	var note Note
-	var createdAt, updatedAt string
-	err = tx.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id).Scan(&note.ID, &note.Content, &createdAt, &updatedAt)
+	note, err := scanNote(tx.QueryRowContext(ctx, `SELECT id, content, created_at, updated_at FROM notes WHERE id = ?`, id), "read note for deletion")
 	if errors.Is(err, sql.ErrNoRows) {
 		return Note{}, ErrNotFound
 	}
 	if err != nil {
-		return Note{}, fmt.Errorf("read note for deletion: %w", err)
-	}
-	note.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return Note{}, fmt.Errorf("parse note creation time: %w", err)
-	}
-	note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
-	if err != nil {
-		return Note{}, fmt.Errorf("parse note update time: %w", err)
+		return Note{}, err
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, id)
 	if err != nil {
@@ -179,6 +153,24 @@ func (s *Store) Delete(ctx context.Context, id int64) (Note, error) {
 	}
 	if err := tx.Commit(); err != nil {
 		return Note{}, fmt.Errorf("delete note: %w", err)
+	}
+	return note, nil
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanNote(row rowScanner, context string) (Note, error) {
+	var note Note
+	var createdAt, updatedAt string
+	if err := row.Scan(&note.ID, &note.Content, &createdAt, &updatedAt); err != nil {
+		return Note{}, fmt.Errorf("%s: %w", context, err)
+	}
+	var err error
+	if note.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return Note{}, fmt.Errorf("parse note creation time: %w", err)
+	}
+	if note.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
+		return Note{}, fmt.Errorf("parse note update time: %w", err)
 	}
 	return note, nil
 }
