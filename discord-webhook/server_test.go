@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	notestore "nyan-go/internal/storage/notes"
 )
 
 func TestLoginValidatesPasswordWithoutCallingWebhook(t *testing.T) {
@@ -332,6 +337,142 @@ func TestPageAllowsSameOriginRequests(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `id="remove-file"`) || !strings.Contains(response.Body.String(), `<svg class="pixel-art"`) {
 		t.Fatal("page lacks the file removal control or pixel-art Nyan Cat")
 	}
+}
+
+func TestNotesHTTPCRUDRequiresPasswordAndPreservesText(t *testing.T) {
+	store, err := notestore.Open(filepath.Join(t.TempDir(), "notes.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	webhookCalls := 0
+	handler := newHandler("secret", "https://discord.com/api/webhooks/123/secret", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		webhookCalls++
+		return nil, fmt.Errorf("notes must not call Discord")
+	})}, store)
+
+	for _, tc := range []struct{ method, path string }{{http.MethodGet, "/notes"}, {http.MethodPost, "/notes"}, {http.MethodPut, "/notes/1"}, {http.MethodDelete, "/notes/1"}} {
+		unauthorized := httptest.NewRecorder()
+		handler.ServeHTTP(unauthorized, httptest.NewRequest(tc.method, tc.path, nil))
+		if unauthorized.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthorized %s %s status=%d, want 401", tc.method, tc.path, unauthorized.Code)
+		}
+	}
+
+	content := "Xin chào 🐈 <img src=x onerror=alert(1)>"
+	created := requestNotes(t, handler, http.MethodPost, "/notes", `{"content":`+mustJSON(t, content)+`}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var createdResult struct {
+		Success bool           `json:"success"`
+		Note    notestore.Note `json:"note"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &createdResult); err != nil || !createdResult.Success || createdResult.Note.Content != content {
+		t.Fatalf("created response=%s err=%v", created.Body.String(), err)
+	}
+	newest := requestNotes(t, handler, http.MethodPost, "/notes", `{"content":"Ghi chú gần đây"}`)
+	if newest.Code != http.StatusCreated {
+		t.Fatalf("create second note status=%d body=%s", newest.Code, newest.Body.String())
+	}
+
+	listed := requestNotes(t, handler, http.MethodGet, "/notes?limit=1", "")
+	var page notesPage
+	if err := json.Unmarshal(listed.Body.Bytes(), &page); err != nil || listed.Code != http.StatusOK || len(page.Notes) != 1 || page.Notes[0].Content != "Ghi chú gần đây" || !page.HasMore || page.NextOffset != 1 {
+		t.Fatalf("list status=%d page=%#v err=%v", listed.Code, page, err)
+	}
+	older := requestNotes(t, handler, http.MethodGet, "/notes?limit=1&offset=1", "")
+	if err := json.Unmarshal(older.Body.Bytes(), &page); err != nil || len(page.Notes) != 1 || page.Notes[0].Content != content || page.HasMore {
+		t.Fatalf("older notes page=%#v err=%v", page, err)
+	}
+	updated := requestNotes(t, handler, http.MethodPut, fmt.Sprintf("/notes/%d", createdResult.Note.ID), `{"content":"Đã sửa ✨"}`)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), "Đã sửa ✨") {
+		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	deleted := requestNotes(t, handler, http.MethodDelete, fmt.Sprintf("/notes/%d", createdResult.Note.ID), "")
+	var deletedResult struct {
+		Note notestore.Note `json:"note"`
+	}
+	if deleted.Code != http.StatusOK || json.Unmarshal(deleted.Body.Bytes(), &deletedResult) != nil || deletedResult.Note.ID != createdResult.Note.ID || deletedResult.Note.Content != "Đã sửa ✨" || deletedResult.Note.CreatedAt.IsZero() || deletedResult.Note.UpdatedAt.IsZero() {
+		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	missing := requestNotes(t, handler, http.MethodDelete, fmt.Sprintf("/notes/%d", createdResult.Note.ID), "")
+	if missing.Code != http.StatusNotFound || webhookCalls != 0 {
+		t.Fatalf("missing delete status=%d webhook calls=%d", missing.Code, webhookCalls)
+	}
+}
+
+func TestNotesHTTPRejectsInvalidRequestsAndBoundsPages(t *testing.T) {
+	store, err := notestore.Open(filepath.Join(t.TempDir(), "notes.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := newHandler("secret", "https://discord.com/api/webhooks/123/secret", nil, store)
+	for _, tc := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodPost, "/notes", `{"content":"  "}`, http.StatusBadRequest},
+		{http.MethodPost, "/notes", `{"content":"ok","extra":true}`, http.StatusBadRequest},
+		{http.MethodPost, "/notes", `{`, http.StatusBadRequest},
+		{http.MethodGet, "/notes?limit=101", "", http.StatusBadRequest},
+		{http.MethodGet, "/notes?offset=-1", "", http.StatusBadRequest},
+		{http.MethodPut, "/notes/nope", `{"content":"ok"}`, http.StatusBadRequest},
+	} {
+		response := requestNotes(t, handler, tc.method, tc.path, tc.body)
+		if response.Code != tc.want {
+			t.Errorf("%s %s status=%d body=%s, want %d", tc.method, tc.path, response.Code, response.Body.String(), tc.want)
+		}
+	}
+
+	tooLong := requestNotes(t, handler, http.MethodPost, "/notes", `{"content":`+mustJSON(t, strings.Repeat("💸", notestore.MaxRunes+1))+`}`)
+	if tooLong.Code != http.StatusBadRequest {
+		t.Fatalf("oversized content status=%d body=%s", tooLong.Code, tooLong.Body.String())
+	}
+	tooLarge := requestNotes(t, handler, http.MethodPost, "/notes", `{"content":"`+strings.Repeat("x", 70<<10)+`"}`)
+	if tooLarge.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized request status=%d body=%s", tooLarge.Code, tooLarge.Body.String())
+	}
+	if !strings.Contains(pageHTML, `id="tab-notes"`) || !strings.Contains(pageHTML, `id="note-content"`) || !strings.Contains(pageHTML, `text.textContent=note.content`) {
+		t.Fatal("notes page lacks an accessible tab/editor or text-only rendering")
+	}
+}
+
+func TestNotesDatabaseErrorsDoNotExposeSQLiteDetails(t *testing.T) {
+	store, err := notestore.Open(filepath.Join(t.TempDir(), "notes.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newHandler("secret", "https://discord.com/api/webhooks/123/secret", nil, store)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := requestNotes(t, handler, http.MethodGet, "/notes", "")
+	if response.Code != http.StatusInternalServerError || strings.Contains(strings.ToLower(response.Body.String()), "sqlite") {
+		t.Fatalf("database error response status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func requestNotes(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("X-Webhook-Password", base64.StdEncoding.EncodeToString([]byte("secret")))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

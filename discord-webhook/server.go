@@ -22,6 +22,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	notestore "nyan-go/internal/storage/notes"
 )
 
 const (
@@ -33,6 +35,8 @@ const (
 	maxConcurrent    = 2
 	maxPasswordFails = 5
 	passwordWindow   = time.Minute
+	defaultNoteLimit = 50
+	maxNoteBodyBytes = 64 << 10
 )
 
 type webhookSender struct {
@@ -40,6 +44,7 @@ type webhookSender struct {
 	endpoint     string
 	client       *http.Client
 	active       chan struct{}
+	notes        notesRepository
 	mu           sync.Mutex
 	failures     map[string]failureWindow
 }
@@ -49,7 +54,14 @@ type failureWindow struct {
 	until time.Time
 }
 
-func newHandler(password, webhookURL string, client *http.Client) http.Handler {
+type notesRepository interface {
+	Create(context.Context, string) (notestore.Note, error)
+	List(context.Context, int, int) ([]notestore.Note, error)
+	Update(context.Context, int64, string) (notestore.Note, error)
+	Delete(context.Context, int64) (notestore.Note, error)
+}
+
+func newHandler(password, webhookURL string, client *http.Client, noteStores ...notesRepository) http.Handler {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -61,6 +73,9 @@ func newHandler(password, webhookURL string, client *http.Client) http.Handler {
 	sender := &webhookSender{
 		passwordHash: sha256.Sum256([]byte(password)), endpoint: webhookURL, client: &clientCopy,
 		active: make(chan struct{}, maxConcurrent), failures: make(map[string]failureWindow),
+	}
+	if len(noteStores) > 0 {
+		sender.notes = noteStores[0]
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +95,142 @@ func newHandler(password, webhookURL string, client *http.Client) http.Handler {
 			writeJSON(w, http.StatusOK, sendResponse{Success: true, Message: "Đăng nhập thành công."})
 		}
 	})
+	if sender.notes != nil {
+		mux.HandleFunc("GET /notes", sender.withAuth(sender.handleListNotes))
+		mux.HandleFunc("POST /notes", sender.withAuth(sender.handleCreateNote))
+		mux.HandleFunc("PUT /notes/{id}", sender.withAuth(sender.handleUpdateNote))
+		mux.HandleFunc("DELETE /notes/{id}", sender.withAuth(sender.handleDeleteNote))
+	}
 	return securityHeaders(mux)
+}
+
+func (s *webhookSender) withAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorize(w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *webhookSender) handleListNotes(w http.ResponseWriter, r *http.Request) {
+	limit := defaultNoteLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > notestore.MaxPageSize {
+			writeError(w, http.StatusBadRequest, "Số lượng ghi chú cần tải không hợp lệ.", 0)
+			return
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 || parsed > 1_000_000 {
+			writeError(w, http.StatusBadRequest, "Vị trí ghi chú cần tải không hợp lệ.", 0)
+			return
+		}
+		offset = parsed
+	}
+	notes, err := s.notes.List(r.Context(), offset, limit+1)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Không tải được ghi chú.", 0)
+		return
+	}
+	hasMore := len(notes) > limit
+	if hasMore {
+		notes = notes[:limit]
+	}
+	nextOffset := 0
+	if hasMore {
+		nextOffset = offset + len(notes)
+	}
+	writeJSON(w, http.StatusOK, notesPage{Notes: notes, HasMore: hasMore, NextOffset: nextOffset})
+}
+
+func (s *webhookSender) handleCreateNote(w http.ResponseWriter, r *http.Request) {
+	content, ok := readNoteContent(w, r)
+	if !ok {
+		return
+	}
+	note, err := s.notes.Create(r.Context(), content)
+	if err != nil {
+		writeNoteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, noteResponse{Success: true, Message: "Đã lưu ghi chú.", Note: &note})
+}
+
+func (s *webhookSender) handleUpdateNote(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseNoteID(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "Mã ghi chú không hợp lệ.", 0)
+		return
+	}
+	content, ok := readNoteContent(w, r)
+	if !ok {
+		return
+	}
+	note, err := s.notes.Update(r.Context(), id, content)
+	if err != nil {
+		writeNoteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, noteResponse{Success: true, Message: "Đã cập nhật ghi chú.", Note: &note})
+}
+
+func (s *webhookSender) handleDeleteNote(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseNoteID(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "Mã ghi chú không hợp lệ.", 0)
+		return
+	}
+	note, err := s.notes.Delete(r.Context(), id)
+	if err != nil {
+		writeNoteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, noteResponse{Success: true, Message: "Đã xóa ghi chú.", Note: &note})
+}
+
+func parseNoteID(raw string) (int64, bool) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	return id, err == nil && id > 0
+}
+
+func readNoteContent(w http.ResponseWriter, r *http.Request) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxNoteBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request struct {
+		Content string `json:"content"`
+	}
+	if err := decoder.Decode(&request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "Nội dung ghi chú vượt giới hạn yêu cầu.", 0)
+		} else {
+			writeError(w, http.StatusBadRequest, "Dữ liệu ghi chú không hợp lệ.", 0)
+		}
+		return "", false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "Dữ liệu ghi chú không hợp lệ.", 0)
+		return "", false
+	}
+	return request.Content, true
+}
+
+func writeNoteError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, notestore.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "Ghi chú phải có nội dung và không vượt quá 10.000 ký tự.", 0)
+	case errors.Is(err, notestore.ErrNotFound):
+		writeError(w, http.StatusNotFound, "Không tìm thấy ghi chú.", 0)
+	default:
+		writeError(w, http.StatusInternalServerError, "Không lưu được ghi chú.", 0)
+	}
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -372,7 +522,7 @@ func writeError(w http.ResponseWriter, status int, message string, retry int) {
 	writeJSON(w, status, sendResponse{Message: message, RetryAfter: retry})
 }
 
-func writeJSON(w http.ResponseWriter, status int, value sendResponse) {
+func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
@@ -382,6 +532,18 @@ type sendResponse struct {
 	Success    bool   `json:"success,omitempty"`
 	Message    string `json:"message"`
 	RetryAfter int    `json:"retry_after,omitempty"`
+}
+
+type notesPage struct {
+	Notes      []notestore.Note `json:"notes"`
+	HasMore    bool             `json:"has_more"`
+	NextOffset int              `json:"next_offset"`
+}
+
+type noteResponse struct {
+	Success bool            `json:"success"`
+	Message string          `json:"message"`
+	Note    *notestore.Note `json:"note,omitempty"`
 }
 
 type rateLimitError struct{ seconds int }
@@ -399,14 +561,15 @@ func (e *webhookResponseError) Error() string {
 const pageHTML = `<!doctype html>
 <html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nyan Post</title>
 <style>
-:root{color-scheme:light;--ink:#33264b;--pink:#ff72ad;--blue:#68d7f2;--paper:#fffafc;--edge:#43315e}*{box-sizing:border-box}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;background-color:#c7f2fc;background-image:linear-gradient(90deg,#fff7 50%,transparent 50%),linear-gradient(#fff7 50%,transparent 50%);background-size:8px 8px;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.card{width:min(100%,560px);padding:26px;background:var(--paper);border:4px solid var(--edge);box-shadow:8px 8px 0 #69538b;border-radius:4px}h1{margin:0;text-align:center;font-size:clamp(25px,7vw,38px);letter-spacing:2px;text-shadow:3px 3px #ffc6df}.rainbow{height:9px;margin:20px 0;background:linear-gradient(#ff657d 0 16%,#ffb454 16% 32%,#ffe269 32% 48%,#61d68a 48% 64%,#63bee7 64% 80%,#a87ae0 80%)}.cat{display:flex;align-items:center;justify-content:center;margin:14px}.pixel-art{display:block;width:min(100%,240px);height:auto;image-rendering:pixelated}form{display:grid;gap:15px}label{display:grid;gap:7px;font-weight:700}input,textarea,button{font:inherit;color:inherit;border:3px solid var(--edge);border-radius:2px;padding:11px;background:white}textarea{resize:vertical;min-height:110px}[hidden]{display:none!important}.attachment{display:grid;gap:10px}.attachment-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:700}.choose-file{background:var(--blue)}.remove-file{flex-shrink:0;padding:5px 8px;font-size:12px;box-shadow:2px 2px 0 var(--edge)}.remove-file:disabled{cursor:default}#file-name{overflow-wrap:anywhere}button{font-weight:900;background:#ff90c3;box-shadow:4px 4px 0 var(--edge);cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #568bd7;outline-offset:3px}button:disabled{opacity:.6;cursor:wait;box-shadow:none}.hint{font-size:13px;margin:0}.status{min-height:1.5em;font-weight:700}.status[data-kind=error]{color:#a42648}.status[data-kind=success]{color:#176d40}@media(max-width:480px){.card{padding:18px}body{padding:12px}}
+:root{color-scheme:light;--ink:#33264b;--pink:#ff72ad;--blue:#68d7f2;--paper:#fffafc;--edge:#43315e}*{box-sizing:border-box}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;background-color:#c7f2fc;background-image:linear-gradient(90deg,#fff7 50%,transparent 50%),linear-gradient(#fff7 50%,transparent 50%);background-size:8px 8px;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.card{width:min(100%,560px);padding:26px;background:var(--paper);border:4px solid var(--edge);box-shadow:8px 8px 0 #69538b;border-radius:4px}h1{margin:0;text-align:center;font-size:clamp(25px,7vw,38px);letter-spacing:2px;text-shadow:3px 3px #ffc6df}.rainbow{height:9px;margin:20px 0;background:linear-gradient(#ff657d 0 16%,#ffb454 16% 32%,#ffe269 32% 48%,#61d68a 48% 64%,#63bee7 64% 80%,#a87ae0 80%)}.cat{display:flex;align-items:center;justify-content:center;margin:14px}.pixel-art{display:block;width:min(100%,240px);height:auto;image-rendering:pixelated}form{display:grid;gap:15px}label{display:grid;gap:7px;font-weight:700}input,textarea,button{font:inherit;color:inherit;border:3px solid var(--edge);border-radius:2px;padding:11px;background:white}textarea{resize:vertical;min-height:110px}[hidden]{display:none!important}.attachment{display:grid;gap:10px}.attachment-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:700}.choose-file{background:var(--blue)}.remove-file{flex-shrink:0;padding:5px 8px;font-size:12px;box-shadow:2px 2px 0 var(--edge)}.remove-file:disabled{cursor:default}#file-name{overflow-wrap:anywhere}button{font-weight:900;background:#ff90c3;box-shadow:4px 4px 0 var(--edge);cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #568bd7;outline-offset:3px}button:disabled{opacity:.6;cursor:wait;box-shadow:none}.hint{font-size:13px;margin:0}.status{min-height:1.5em;font-weight:700}.status[data-kind=error]{color:#a42648}.status[data-kind=success]{color:#176d40}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0}.tabs button[aria-selected=true]{background:var(--blue)}.notes-list{display:grid;gap:12px;padding:0;list-style:none}.note{padding:12px;border:2px solid var(--edge);background:white;overflow-wrap:anywhere;white-space:pre-wrap}.note-content{margin:0 0 10px}.note-meta{font-size:12px;margin:0 0 10px}.note-actions{display:flex;gap:10px}.note-actions button{padding:6px 9px;font-size:13px}.note-editor{width:100%;min-height:160px}@media(max-width:480px){.card{padding:18px}body{padding:12px}}
 </style></head><body><main class="card"><h1>NYAN POST</h1><div class="rainbow" aria-hidden="true"></div><div class="cat"><svg class="pixel-art" viewBox="0 0 180 108" role="img" aria-label="Nyan Cat vẽ bằng pixel" shape-rendering="crispEdges"><rect x="0" y="42" width="36" height="8" fill="#ff657d"/><rect x="0" y="50" width="36" height="8" fill="#ffb454"/><rect x="0" y="58" width="36" height="8" fill="#ffe269"/><rect x="0" y="66" width="36" height="8" fill="#61d68a"/><rect x="0" y="74" width="36" height="8" fill="#63bee7"/><rect x="0" y="82" width="36" height="8" fill="#a87ae0"/><rect x="30" y="30" width="84" height="60" fill="#43315e"/><rect x="90" y="84" width="12" height="12" fill="#43315e"/><rect x="114" y="84" width="12" height="12" fill="#43315e"/><rect x="102" y="24" width="60" height="60" fill="#43315e"/><rect x="108" y="6" width="18" height="30" fill="#43315e"/><rect x="138" y="6" width="18" height="30" fill="#43315e"/><rect x="36" y="36" width="72" height="48" fill="#ff9cc7"/><rect x="48" y="48" width="12" height="6" fill="#fff1a8"/><rect x="72" y="48" width="12" height="6" fill="#fff1a8"/><rect x="60" y="66" width="24" height="6" fill="#fff1a8"/><rect x="108" y="30" width="48" height="48" fill="#d8d5e4"/><rect x="114" y="12" width="6" height="12" fill="#e998b4"/><rect x="144" y="12" width="6" height="12" fill="#e998b4"/><rect x="120" y="42" width="6" height="6" fill="#43315e"/><rect x="138" y="42" width="6" height="6" fill="#43315e"/><rect x="132" y="48" width="6" height="6" fill="#ff72ad"/><rect x="108" y="60" width="6" height="6" fill="#fffafc"/><rect x="150" y="60" width="6" height="6" fill="#fffafc"/></svg></div>
+<div id="tabs" class="tabs" role="tablist" aria-label="Nyan Post" hidden><button id="tab-send" type="button" role="tab" aria-selected="true" aria-controls="sender">Gửi Discord ✦</button><button id="tab-notes" type="button" role="tab" aria-selected="false" aria-controls="notes-panel" tabindex="-1">Ghi chú ✎</button></div>
 <form id="login">
 <label>Mật khẩu<input id="password" type="password" autocomplete="current-password" required autofocus></label>
 <button id="login-button" type="submit">Đăng nhập ✦</button>
 <p id="login-status" class="status" role="status" aria-live="polite"></p>
 </form>
-<form id="sender" hidden>
+<form id="sender" role="tabpanel" aria-labelledby="tab-send" tabindex="0" hidden>
 <label>Tin nhắn<textarea id="content" maxlength="4000" placeholder="Gửi lời chào..." aria-describedby="count"></textarea></label>
 <p class="hint" id="count" aria-live="polite">0 / 2.000 ký tự</p>
 <div class="attachment" role="group" aria-labelledby="file-label">
@@ -419,11 +582,17 @@ const pageHTML = `<!doctype html>
 <p class="hint">Thông báo @everyone và mention đã tắt.</p>
 <button id="send" type="submit">Gửi tới Discord ✦</button>
 <p id="status" class="status" role="status" aria-live="polite"></p>
-</form></main>
+</form>
+<section id="notes-panel" role="tabpanel" aria-labelledby="tab-notes" tabindex="0" hidden>
+<form id="notes-form"><label for="note-content">Ghi chú<textarea id="note-content" class="note-editor" maxlength="20000" placeholder="Viết ghi chú..." aria-describedby="note-count"></textarea></label><p class="hint" id="note-count" aria-live="polite">0 / 10.000 ký tự</p><button id="save-note" type="submit">Lưu ghi chú ✦</button><button id="cancel-edit" type="button" hidden>Hủy sửa</button></form>
+<p id="notes-status" class="status" role="status" aria-live="polite"></p><ul id="notes-list" class="notes-list" aria-busy="false"></ul><button id="load-more-notes" type="button" hidden>Tải ghi chú cũ hơn</button>
+</section></main>
 <script>
 const login=document.querySelector('#login'),password=document.querySelector('#password'),loginButton=document.querySelector('#login-button'),loginStatus=document.querySelector('#login-status');
 const form=document.querySelector('#sender'),content=document.querySelector('#content'),file=document.querySelector('#file'),chooseFile=document.querySelector('#choose-file'),removeFile=document.querySelector('#remove-file'),send=document.querySelector('#send'),status=document.querySelector('#status'),count=document.querySelector('#count'),fileName=document.querySelector('#file-name');
-const limit=2000,maxFile=20*1024*1024;
+const tabs=document.querySelector('#tabs'),tabSend=document.querySelector('#tab-send'),tabNotes=document.querySelector('#tab-notes'),notesPanel=document.querySelector('#notes-panel'),notesForm=document.querySelector('#notes-form'),noteContent=document.querySelector('#note-content'),noteCount=document.querySelector('#note-count'),saveNote=document.querySelector('#save-note'),cancelEdit=document.querySelector('#cancel-edit'),notesStatus=document.querySelector('#notes-status'),notesList=document.querySelector('#notes-list'),loadMoreNotes=document.querySelector('#load-more-notes');
+const limit=2000,maxFile=20*1024*1024,noteLimit=10000;
+let notesOffset=0,notesLoading=false,editingNoteID=null;
 // ponytail: credentials live in memory until refresh; add server sessions if persistent login is needed.
 let credential='';
 function showError(target,error){target.dataset.kind='error';target.textContent=error.message+(error.retry?' Chờ '+error.retry+' giây rồi thử lại.':'')}
@@ -435,7 +604,7 @@ login.addEventListener('submit',async event=>{
     const response=await fetch('/auth',{method:'POST',headers:{'X-Webhook-Password':encodedPassword}});
     const result=await response.json();
     if(!response.ok||!result.success)throw Object.assign(new Error(result.message||'Không đăng nhập được.'),{retry:result.retry_after});
-    credential=encodedPassword;password.value='';login.hidden=true;form.hidden=false;content.focus();
+    credential=encodedPassword;password.value='';login.hidden=true;tabs.hidden=false;activateTab('send');content.focus();
   }catch(error){showError(loginStatus,error)}finally{loginButton.disabled=false}
 });
 content.addEventListener('input',()=>{const n=Array.from(content.value).length;count.textContent=n+' / 2.000 ký tự';count.style.color=n>limit?'#a42648':''});
@@ -452,9 +621,23 @@ form.addEventListener('submit',async event=>{
   try{
     const response=await fetch('/send',{method:'POST',headers:{'X-Webhook-Password':credential},body:data});
     const result=await response.json();
-    if(response.status===401){credential='';form.hidden=true;login.hidden=false;showError(loginStatus,new Error(result.message||'Vui lòng đăng nhập lại.'));password.focus();return}
+    if(response.status===401){credential='';tabs.hidden=true;form.hidden=true;notesPanel.hidden=true;login.hidden=false;showError(loginStatus,new Error(result.message||'Vui lòng đăng nhập lại.'));password.focus();return}
     if(!response.ok||!result.success)throw Object.assign(new Error(result.message||'Không gửi được tin nhắn.'),{retry:result.retry_after});
     status.dataset.kind='success';status.textContent=result.message;content.value='';content.dispatchEvent(new Event('input'));file.value='';file.dispatchEvent(new Event('change'));
   }catch(error){showError(status,error)}finally{send.disabled=false}
 });
+function activateTab(name){const showNotes=name==='notes';form.hidden=showNotes;notesPanel.hidden=!showNotes;tabSend.setAttribute('aria-selected',String(!showNotes));tabNotes.setAttribute('aria-selected',String(showNotes));tabSend.tabIndex=showNotes?-1:0;tabNotes.tabIndex=showNotes?0:-1;if(showNotes)loadNotes(true)}
+tabSend.addEventListener('click',()=>activateTab('send'));
+tabNotes.addEventListener('click',()=>activateTab('notes'));
+tabs.addEventListener('keydown',event=>{const order=[tabSend,tabNotes],index=order.indexOf(document.activeElement);if(index<0)return;let next=index;if(event.key==='ArrowRight'||event.key==='ArrowDown')next=(index+1)%order.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')next=(index+order.length-1)%order.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=order.length-1;else return;event.preventDefault();order[next].focus();order[next].click()});
+async function requestNotes(url,options={}){const response=await fetch(url,{...options,headers:{...(options.headers||{}),'X-Webhook-Password':credential,...(options.body?{'Content-Type':'application/json'}:{})}});const result=await response.json();if(response.status===401){credential='';tabs.hidden=true;form.hidden=true;notesPanel.hidden=true;login.hidden=false;showError(loginStatus,new Error(result.message||'Vui lòng đăng nhập lại.'));password.focus();throw new Error('Phiên đăng nhập hết hạn.')}if(!response.ok)throw new Error(result.message||'Không xử lý được ghi chú.');return result}
+function setNoteStatus(message,kind=''){notesStatus.dataset.kind=kind;notesStatus.textContent=message}
+function formatNoteTime(value){return new Intl.DateTimeFormat('vi-VN',{dateStyle:'short',timeStyle:'short',timeZone:'Asia/Ho_Chi_Minh'}).format(new Date(value))}
+function renderNote(note){const item=document.createElement('li');item.className='note';const text=document.createElement('p');text.className='note-content';text.textContent=note.content;const updated=document.createElement('p');updated.className='note-meta';updated.textContent='Cập nhật '+formatNoteTime(note.updated_at);const actions=document.createElement('div');actions.className='note-actions';const edit=document.createElement('button');edit.type='button';edit.textContent='Sửa';edit.setAttribute('aria-label','Sửa ghi chú '+note.id);edit.addEventListener('click',()=>{editingNoteID=note.id;noteContent.value=note.content;noteContent.dispatchEvent(new Event('input'));saveNote.textContent='Cập nhật ghi chú ✦';cancelEdit.hidden=false;noteContent.focus()});const remove=document.createElement('button');remove.type='button';remove.textContent='Xóa';remove.setAttribute('aria-label','Xóa ghi chú '+note.id);remove.addEventListener('click',async()=>{if(!confirm('Xóa ghi chú này?'))return;remove.disabled=true;try{const result=await requestNotes('/notes/'+note.id,{method:'DELETE'});if(await loadNotes(true))setNoteStatus(result.message,'success')}catch(error){remove.disabled=false;setNoteStatus(error.message,'error')}});actions.append(edit,remove);item.append(text,updated,actions);notesList.append(item)}
+async function loadNotes(reset){if(notesLoading)return false;notesLoading=true;notesList.setAttribute('aria-busy','true');loadMoreNotes.disabled=true;setNoteStatus('Đang tải ghi chú…');if(reset){notesOffset=0;notesList.replaceChildren()}try{const result=await requestNotes('/notes?limit=50&offset='+notesOffset);for(const note of result.notes)renderNote(note);notesOffset=result.next_offset||notesOffset+result.notes.length;loadMoreNotes.hidden=!result.has_more;if(!result.notes.length&&!notesOffset)setNoteStatus('Chưa có ghi chú.');return true}catch(error){setNoteStatus(error.message,'error');return false}finally{notesLoading=false;notesList.setAttribute('aria-busy','false');loadMoreNotes.disabled=false}}
+loadMoreNotes.addEventListener('click',()=>loadNotes(false));
+noteContent.addEventListener('input',()=>{let runes=Array.from(noteContent.value);if(runes.length>noteLimit){noteContent.value=runes.slice(0,noteLimit).join('');runes=runes.slice(0,noteLimit)}const n=runes.length;noteCount.textContent=n.toLocaleString('vi-VN')+' / 10.000 ký tự';noteCount.style.color=n>noteLimit?'#a42648':''});
+function clearNoteEditor(){editingNoteID=null;notesForm.reset();noteContent.dispatchEvent(new Event('input'));saveNote.textContent='Lưu ghi chú ✦';cancelEdit.hidden=true}
+cancelEdit.addEventListener('click',clearNoteEditor);
+notesForm.addEventListener('submit',async event=>{event.preventDefault();const value=noteContent.value,n=Array.from(value).length;if(!value.trim()){setNoteStatus('Nhập nội dung ghi chú.','error');noteContent.focus();return}if(n>noteLimit){setNoteStatus('Ghi chú vượt giới hạn 10.000 ký tự.','error');noteContent.focus();return}saveNote.disabled=true;setNoteStatus(editingNoteID?'Đang cập nhật…':'Đang lưu…');try{const url=editingNoteID?'/notes/'+editingNoteID:'/notes',method=editingNoteID?'PUT':'POST',result=await requestNotes(url,{method,body:JSON.stringify({content:value})});clearNoteEditor();if(await loadNotes(true))setNoteStatus(result.message,'success')}catch(error){setNoteStatus(error.message,'error')}finally{saveNote.disabled=false}});
 </script></body></html>`
